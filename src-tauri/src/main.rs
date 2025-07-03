@@ -2,21 +2,32 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod synchronizer;
 mod types;
+use std::sync::{LazyLock, Mutex};
+
 use tauri::{AppHandle, Manager};
 use tauri_plugin_positioner::{Position, WindowExt};
 
-use crate::synchronizer::TRANSFERS;
+use crate::{
+    synchronizer::TRANSFERS,
+    types::{Config, TransferState},
+};
+static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
+            std::fs::create_dir_all(app.path_resolver().app_data_dir().unwrap()).unwrap();
+            set_config(app.handle());
             open_main_window(app.handle());
             open_config_window(app.handle());
+
             synchronizer::start(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             open_config_window,
-            get_completed_transfers
+            get_completed_transfers,
+            update_config,
+            get_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -77,7 +88,31 @@ fn get_completed_transfers() -> Vec<types::Transfer> {
         .lock()
         .unwrap()
         .values()
-        .filter(|transfer| transfer.state == "completed")
+        .filter(|transfer| transfer.state == TransferState::Completed)
         .map(|transfer| transfer.clone())
         .collect()
+}
+
+#[tauri::command]
+fn update_config(app: AppHandle, config: Config) {
+    let app_dir = app.path_resolver().app_data_dir().unwrap();
+    let config_path = app_dir.join("config.json");
+    *CONFIG.lock().unwrap() = config.clone();
+    synchronizer::stop();
+    synchronizer::start(app);
+    std::fs::write(config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+}
+
+#[tauri::command]
+fn get_config() -> Config {
+    let config = CONFIG.lock().unwrap().clone();
+    config
+}
+
+fn set_config(app: AppHandle) {
+    let app_dir = app.path_resolver().app_data_dir().unwrap();
+    let config_path = app_dir.join("config.json");
+    let config_file = std::fs::read_to_string(config_path).unwrap();
+    let config: Config = serde_json::from_str(&config_file).unwrap_or_default();
+    *CONFIG.lock().unwrap() = config;
 }

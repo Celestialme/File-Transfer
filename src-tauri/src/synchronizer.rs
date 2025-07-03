@@ -13,7 +13,7 @@ use std::{
 use tauri::Manager;
 use tungstenite::{connect, http::Uri, ClientRequestBuilder};
 
-use crate::types::Transfer;
+use crate::{types::Transfer, CONFIG};
 mod api;
 mod debouncer;
 mod fstree;
@@ -23,15 +23,20 @@ static IGNORE_LIST: LazyLock<Mutex<HashSet<PathBuf>>> =
 pub static TRANSFERS: LazyLock<Mutex<HashMap<PathBuf, Transfer>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static SOCKET_ID: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+static WATCHER: std::sync::Mutex<Option<notify::ReadDirectoryChangesWatcher>> =
+    std::sync::Mutex::new(None);
 pub fn start(app: tauri::AppHandle) {
     std::thread::spawn(move || {
+        let config = CONFIG.lock().unwrap().clone();
+        let root_path = config.folder_path;
         *SOCKET_ID.lock().unwrap() = uuid::Uuid::new_v4().to_string();
 
-        // Remove the trailing newline
-        let root_path = "D:\\python\\codes\\fiverr\\testfolder\\f3";
         let (tx, rx) = mpsc::channel::<Result<Event>>();
         let mut watcher = notify::recommended_watcher(tx).unwrap();
         let root_path = PathBuf::from(root_path);
+        if !root_path.exists() {
+            return;
+        }
         let local_tree = Arc::new(Mutex::new(fstree::build_tree(&root_path).unwrap()));
         let _root_path = root_path.clone();
         let _local_tree = local_tree.clone();
@@ -39,9 +44,16 @@ pub fn start(app: tauri::AppHandle) {
         std::thread::spawn({
             let local_tree = _local_tree.clone();
             let root_path = _root_path.clone();
+            let app = app.app_handle().clone();
             move || loop {
+                let config = CONFIG.lock().unwrap().clone();
+                let server = config.server_url;
                 let socket_id = SOCKET_ID.lock().unwrap().clone();
-                let uri: Uri = "ws://127.0.0.1:3000".parse().unwrap();
+                let uri: Uri = server
+                    .replace("https://", "wss://")
+                    .replace("http://", "ws://")
+                    .parse()
+                    .unwrap();
                 let request = ClientRequestBuilder::new(uri).with_header("socket_id", &socket_id);
                 match connect(request) {
                     Ok((mut socket, _response)) => {
@@ -173,18 +185,29 @@ pub fn start(app: tauri::AppHandle) {
         watcher
             .watch(std::path::Path::new(&root_path), RecursiveMode::Recursive)
             .unwrap();
+        WATCHER.lock().unwrap().replace(watcher);
         let debouncer = debouncer::Debouncer::new(std::time::Duration::from_millis(1000));
+        // watcher.unwatch(&root_path).unwrap();
 
-        for res in rx {
+        while let Ok(res) = rx.recv() {
             match res {
-                Ok(event) => handle_event(event, local_tree.clone(), root_path.clone(), &debouncer),
+                Ok(event) => handle_event(
+                    app.app_handle().clone(),
+                    event,
+                    local_tree.clone(),
+                    root_path.clone(),
+                    &debouncer,
+                ),
                 Err(e) => println!("watch error: {:?}", e),
             }
         }
     });
 }
-
+pub fn stop() {
+    let _ = WATCHER.lock().unwrap().take();
+}
 fn handle_event(
+    app: tauri::AppHandle,
     event: Event,
     tree: Arc<Mutex<fstree::Node>>,
     root_path: PathBuf,
@@ -251,12 +274,12 @@ fn handle_event(
 
             match change.change_type {
                 fstree::ChangeType::Added => match change.node_type {
-                    fstree::NodeType::File => api::upload(&root_path, &change.path),
+                    fstree::NodeType::File => api::upload(app.clone(), &root_path, &change.path),
                     fstree::NodeType::Folder => api::create_folder(&change.path),
                 },
                 fstree::ChangeType::Deleted => api::delete(&change.path),
                 fstree::ChangeType::Renamed { from } => api::rename(&from, &change.path),
-                fstree::ChangeType::Modified => api::upload(&root_path, &change.path),
+                fstree::ChangeType::Modified => api::upload(app.clone(), &root_path, &change.path),
             }
         }
     })

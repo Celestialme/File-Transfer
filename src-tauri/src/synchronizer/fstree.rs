@@ -93,6 +93,7 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
             id: Some(Uuid::new_v4().to_string()),
         })
     } else {
+        println!("Unsupported file type: {}", path.display());
         Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "Unsupported file type",

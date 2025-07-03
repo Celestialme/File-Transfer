@@ -13,6 +13,7 @@
 	};
 	listen('transfer', (event) => {
 		let data = event.payload as Transfer;
+		console.log(data);
 		if (data.state === 'completed') {
 			completedTransfers[data.path] = data;
 			delete activeTransfers[data.path];

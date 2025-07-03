@@ -1,17 +1,14 @@
 <script>
-	let credentials = {
-		username: 'user',
-		password: '••••••••••'
-	};
-	let isEditingPassword = false;
-	let tempPassword = '';
+	import { config } from '$lib/store.svelte';
+	import { update_config } from '$lib/utils';
+
+	let isEditingPassword = $state(false);
 
 	function handlePasswordEdit() {
-		isEditingPassword = !isEditingPassword;
-		if (!isEditingPassword) {
-			credentials.password = tempPassword;
-			tempPassword = '';
+		if (isEditingPassword) {
+			update_config();
 		}
+		isEditingPassword = !isEditingPassword;
 	}
 </script>
 
@@ -19,7 +16,7 @@
 	<div class="flex items-center justify-between">
 		<span class="text-sm font-medium text-gray-700">Nombre de usuario</span>
 		<span class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
-			{credentials.username}
+			{config.username}
 		</span>
 	</div>
 
@@ -29,7 +26,7 @@
 			{#if isEditingPassword}
 				<input
 					type="password"
-					value={tempPassword}
+					bind:value={config.password}
 					class="w-64 rounded-md border border-gray-300 px-3 py-2 focus:border-transparent focus:ring-2 focus:ring-blue-500 focus:outline-none"
 					placeholder="Nueva contraseña"
 				/>
@@ -37,7 +34,7 @@
 				<span
 					class="w-64 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600"
 				>
-					{credentials.password}
+					{'•'.repeat(config.password?.length || 0)}
 				</span>
 			{/if}
 			<button

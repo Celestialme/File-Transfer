@@ -1,15 +1,11 @@
 <script lang="ts">
+	import type { Transfer } from '$lib/types';
 	import Progress from './Progress.svelte';
 
 	let {
 		transfers
 	}: {
-		transfers: {
-			path: string;
-			progress: number;
-			state: 'active' | 'completed';
-			type: 'download' | 'upload';
-		}[];
+		transfers: Transfer[];
 	} = $props();
 </script>
 
@@ -17,7 +13,11 @@
 	{#if transfers.length > 0}
 		<div class="flex flex-col gap-2">
 			{#each transfers as active}
-				<div class="rounded-lg border border-gray-300 px-4 py-2">
+				<div
+					class="rounded-lg border border-l-[5px] border-gray-300 px-4 py-2"
+					class:upload={active.type === 'upload'}
+					class:download={active.type === 'download'}
+				>
 					<div class="flex w-full items-center gap-2">
 						<p
 							class="max-w-[180px] min-w-[180px] overflow-hidden text-start overflow-ellipsis text-gray-600"
@@ -44,3 +44,14 @@
 		<p class="text-lg text-gray-500">No hay transferencias en curso</p>
 	{/if}
 </div>
+
+<style>
+	.upload {
+		border-left-width: 5px;
+		border-left-color: red;
+	}
+	.download {
+		border-left-width: 5px;
+		border-left-color: green;
+	}
+</style>

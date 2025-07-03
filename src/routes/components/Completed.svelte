@@ -1,13 +1,10 @@
 <script lang="ts">
+	import type { Transfer } from '$lib/types';
+
 	let {
 		transfers
 	}: {
-		transfers: {
-			path: string;
-			progress: number;
-			state: 'active' | 'completed';
-			type: 'download' | 'upload';
-		}[];
+		transfers: Transfer[];
 	} = $props();
 </script>
 
@@ -15,7 +12,11 @@
 	{#if transfers.length > 0}
 		<div class="flex flex-col gap-2">
 			{#each transfers as completed}
-				<div class="rounded-lg border border-gray-300 px-4 py-2">
+				<div
+					class:upload={completed.type === 'upload'}
+					class:download={completed.type === 'download'}
+					class="rounded-lg border border-l-[5px] border-gray-300 px-4 py-2"
+				>
 					<div class="flex w-full items-center gap-2">
 						<p
 							class="w-full min-w-[180px] overflow-hidden text-center overflow-ellipsis text-gray-600"
@@ -43,3 +44,14 @@
 		<p class="text-lg text-gray-500">No hay transferencias finalizadas</p>
 	{/if}
 </div>
+
+<style>
+	.upload {
+		border-left-width: 5px;
+		border-left-color: red;
+	}
+	.download {
+		border-left-width: 5px;
+		border-left-color: green;
+	}
+</style>
