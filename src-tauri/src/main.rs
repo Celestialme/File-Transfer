@@ -12,7 +12,8 @@ use crate::{
     types::{Config, TransferState},
 };
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
-fn main() {
+#[tokio::main]
+async fn main() {
     tauri::Builder::default()
         .setup(|app| {
             std::fs::create_dir_all(app.path_resolver().app_data_dir().unwrap()).unwrap();

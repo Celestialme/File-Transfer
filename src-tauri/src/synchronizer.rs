@@ -1,3 +1,5 @@
+use crate::{types::Transfer, CONFIG};
+use futures_util::StreamExt;
 use notify::{
     event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
     Event, EventKind, RecursiveMode, Result, Watcher,
@@ -8,12 +10,11 @@ use std::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex},
 };
 use tauri::Manager;
-use tungstenite::{connect, http::Uri, ClientRequestBuilder};
-
-use crate::{types::Transfer, CONFIG};
+use tokio_tungstenite::{self, connect_async};
+use tungstenite::{http::Uri, ClientRequestBuilder};
 mod api;
 mod debouncer;
 mod fstree;
@@ -22,17 +23,18 @@ static IGNORE_LIST: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 pub static TRANSFERS: LazyLock<Mutex<HashMap<PathBuf, Transfer>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static SOCKET_ID: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-static WATCHER: std::sync::Mutex<Option<notify::ReadDirectoryChangesWatcher>> =
-    std::sync::Mutex::new(None);
+static SOCKET_ID: Mutex<String> = Mutex::new(String::new());
+static WATCHER: Mutex<Option<notify::ReadDirectoryChangesWatcher>> = Mutex::new(None);
 pub fn start(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
+    tokio::spawn(async move {
         let config = CONFIG.lock().unwrap().clone();
         let root_path = config.folder_path;
-        *SOCKET_ID.lock().unwrap() = uuid::Uuid::new_v4().to_string();
 
-        let (tx, rx) = mpsc::channel::<Result<Event>>();
-        let mut watcher = notify::recommended_watcher(tx).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<Event>>();
+        let mut watcher = notify::recommended_watcher(move |res| {
+            tx.send(res).unwrap();
+        })
+        .unwrap();
         let root_path = PathBuf::from(root_path);
         if !root_path.exists() {
             return;
@@ -40,12 +42,15 @@ pub fn start(app: tauri::AppHandle) {
         let local_tree = Arc::new(Mutex::new(fstree::build_tree(&root_path).unwrap()));
         let _root_path = root_path.clone();
         let _local_tree = local_tree.clone();
+        let _app = app.app_handle().clone();
         fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
-        std::thread::spawn({
+        let socket_task = async move {
+            *SOCKET_ID.lock().unwrap() = uuid::Uuid::new_v4().to_string();
             let local_tree = _local_tree.clone();
             let root_path = _root_path.clone();
-            let app = app.app_handle().clone();
-            move || loop {
+            let app = _app.app_handle().clone();
+
+            loop {
                 let config = CONFIG.lock().unwrap().clone();
                 let server = config.server_url;
                 let socket_id = SOCKET_ID.lock().unwrap().clone();
@@ -55,153 +60,147 @@ pub fn start(app: tauri::AppHandle) {
                     .parse()
                     .unwrap();
                 let request = ClientRequestBuilder::new(uri).with_header("socket_id", &socket_id);
-                match connect(request) {
+                match connect_async(request).await {
                     Ok((mut socket, _response)) => {
                         println!("Connected to server");
 
-                        while let Ok(msg) = socket.read() {
-                            if msg.is_text() {
-                                let text = msg.to_string();
-                                println!("Received new tree");
-                                let mut changes: Vec<fstree::Change> = Vec::new();
-                                let remote_tree: fstree::Node =
-                                    serde_json::from_str(&text).unwrap();
-
-                                {
-                                    let local = local_tree.lock().unwrap();
-                                    fstree::diff_trees(
-                                        "",
-                                        Some(&local),
-                                        Some(&remote_tree),
-                                        &mut changes,
+                        while let Some(msg) = socket.next().await {
+                            match msg {
+                                Ok(tungstenite::Message::Text(text)) => {
+                                    handle_msg(
+                                        &local_tree,
+                                        &root_path,
+                                        &app,
+                                        tungstenite::Message::Text(text),
                                     );
                                 }
-
-                                let changes = fstree::detect_renames(changes);
-                                println!("changes: {:?}", changes);
-                                for change in changes {
-                                    match change.change_type {
-                                        fstree::ChangeType::Added => match change.node_type {
-                                            fstree::NodeType::File => {
-                                                println!("add {}", change.path);
-                                                api::download(
-                                                    app.app_handle().clone(),
-                                                    &root_path,
-                                                    &change.path,
-                                                    local_tree.clone(),
-                                                );
-                                            }
-                                            fstree::NodeType::Folder => {
-                                                std::fs::create_dir_all(
-                                                    Path::new(&root_path).join(&change.path),
-                                                )
-                                                .unwrap();
-                                                let node = fstree::build_node(
-                                                    &Path::new(&root_path),
-                                                    &root_path.join(&change.path),
-                                                );
-                                                local_tree
-                                                    .lock()
-                                                    .unwrap()
-                                                    .add_node(node.unwrap())
-                                                    .unwrap();
-                                            }
-                                        },
-                                        fstree::ChangeType::Deleted => match change.node_type {
-                                            fstree::NodeType::File => {
-                                                let _ = std::fs::remove_file(
-                                                    Path::new(&root_path).join(&change.path),
-                                                );
-
-                                                println!("del {}", change.path);
-                                                local_tree
-                                                    .lock()
-                                                    .unwrap()
-                                                    .delete_node(
-                                                        root_path
-                                                            .join(&change.path)
-                                                            .to_str()
-                                                            .unwrap(),
-                                                    )
-                                                    .unwrap();
-                                            }
-                                            fstree::NodeType::Folder => {
-                                                std::fs::remove_dir_all(
-                                                    Path::new(&root_path).join(&change.path),
-                                                )
-                                                .unwrap();
-                                                local_tree
-                                                    .lock()
-                                                    .unwrap()
-                                                    .delete_node(
-                                                        root_path
-                                                            .join(&change.path)
-                                                            .to_str()
-                                                            .unwrap(),
-                                                    )
-                                                    .unwrap();
-                                            }
-                                        },
-                                        fstree::ChangeType::Renamed { from } => {
-                                            std::fs::rename(
-                                                Path::new(&root_path).join(&from),
-                                                Path::new(&root_path).join(&change.path),
-                                            )
-                                            .unwrap();
-                                            local_tree
-                                                .lock()
-                                                .unwrap()
-                                                .rename_node(
-                                                    root_path.join(&from).to_str().unwrap(),
-                                                    root_path.join(&change.path).to_str().unwrap(),
-                                                )
-                                                .unwrap();
-                                        }
-                                        fstree::ChangeType::Modified => {
-                                            api::download(
-                                                app.app_handle().clone(),
-                                                &root_path,
-                                                &change.path,
-                                                local_tree.clone(),
-                                            );
-                                        }
-                                    }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    println!("WebSocket error: {}", e);
                                 }
-
-                                fstree::save_tree(&local_tree.lock().unwrap(), "tree.json")
-                                    .unwrap();
                             }
                         }
+                        println!("Disconnected from server");
                     }
                     Err(e) => {
-                        eprintln!("Failed to connect: {}", e);
+                        println!("Failed to connect: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                 }
-
-                std::thread::sleep(std::time::Duration::from_secs(5));
             }
-        });
-        // Block forever, printing out events as they come in
-        watcher
-            .watch(std::path::Path::new(&root_path), RecursiveMode::Recursive)
-            .unwrap();
-        WATCHER.lock().unwrap().replace(watcher);
-        let debouncer = debouncer::Debouncer::new(std::time::Duration::from_millis(1000));
-        // watcher.unwatch(&root_path).unwrap();
+        };
 
-        while let Ok(res) = rx.recv() {
-            match res {
-                Ok(event) => handle_event(
-                    app.app_handle().clone(),
-                    event,
-                    local_tree.clone(),
-                    root_path.clone(),
-                    &debouncer,
-                ),
-                Err(e) => println!("watch error: {:?}", e),
+        let watcher_task = async move {
+            watcher
+                .watch(std::path::Path::new(&root_path), RecursiveMode::Recursive)
+                .unwrap();
+            WATCHER.lock().unwrap().replace(watcher);
+            let debouncer = debouncer::Debouncer::new(std::time::Duration::from_millis(1000));
+
+            while let Some(res) = rx.recv().await {
+                match res {
+                    Ok(event) => handle_event(
+                        app.app_handle().clone(),
+                        event,
+                        local_tree.clone(),
+                        root_path.clone(),
+                        &debouncer,
+                    ),
+                    Err(e) => println!("watch error: {:?}", e),
+                }
             }
+        };
+        tokio::select! {
+            _ = socket_task => {},
+            _ = watcher_task => {},
         }
     });
+}
+
+fn handle_msg(
+    local_tree: &Arc<Mutex<fstree::Node>>,
+    root_path: &PathBuf,
+    app: &tauri::AppHandle,
+    msg: tungstenite::Message,
+) {
+    let text = msg.to_string();
+    println!("Received new tree");
+    let mut changes: Vec<fstree::Change> = Vec::new();
+    let remote_tree: fstree::Node = serde_json::from_str(&text).unwrap();
+
+    {
+        let local = local_tree.lock().unwrap();
+        fstree::diff_trees("", Some(&local), Some(&remote_tree), &mut changes);
+    }
+
+    let changes = fstree::detect_renames(changes);
+    println!("changes: {:?}", changes);
+    for change in changes {
+        match change.change_type {
+            fstree::ChangeType::Added => match change.node_type {
+                fstree::NodeType::File => {
+                    println!("add {}", change.path);
+                    api::download(
+                        app.app_handle().clone(),
+                        root_path,
+                        &change.path,
+                        local_tree.clone(),
+                    );
+                }
+                fstree::NodeType::Folder => {
+                    std::fs::create_dir_all(Path::new(root_path).join(&change.path)).unwrap();
+                    let node =
+                        fstree::build_node(&Path::new(root_path), &root_path.join(&change.path));
+                    local_tree.lock().unwrap().add_node(node.unwrap()).unwrap();
+                }
+            },
+            fstree::ChangeType::Deleted => match change.node_type {
+                fstree::NodeType::File => {
+                    let _ = std::fs::remove_file(Path::new(root_path).join(&change.path));
+
+                    println!("del {}", change.path);
+                    local_tree
+                        .lock()
+                        .unwrap()
+                        .delete_node(root_path.join(&change.path).to_str().unwrap())
+                        .unwrap();
+                }
+                fstree::NodeType::Folder => {
+                    std::fs::remove_dir_all(Path::new(root_path).join(&change.path)).unwrap();
+                    local_tree
+                        .lock()
+                        .unwrap()
+                        .delete_node(root_path.join(&change.path).to_str().unwrap())
+                        .unwrap();
+                }
+            },
+            fstree::ChangeType::Renamed { from } => {
+                std::fs::rename(
+                    Path::new(root_path).join(&from),
+                    Path::new(root_path).join(&change.path),
+                )
+                .unwrap();
+                local_tree
+                    .lock()
+                    .unwrap()
+                    .rename_node(
+                        root_path.join(&from).to_str().unwrap(),
+                        root_path.join(&change.path).to_str().unwrap(),
+                    )
+                    .unwrap();
+            }
+            fstree::ChangeType::Modified => {
+                api::download(
+                    app.app_handle().clone(),
+                    root_path,
+                    &change.path,
+                    local_tree.clone(),
+                );
+            }
+        }
+    }
+
+    fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
 }
 pub fn stop() {
     let _ = WATCHER.lock().unwrap().take();
