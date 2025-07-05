@@ -23,7 +23,7 @@ async fn main() {
             let config = CONFIG.lock().unwrap().clone();
             if !config.is_configured {
                 open_initial_configuration_window(app.handle());
-            } else if !config.username.is_none() || config.password.is_none() {
+            } else if config.username.is_none() || config.password.is_none() {
                 open_login_window(app.handle());
             } else {
                 open_main_window(app.handle());

@@ -10,12 +10,13 @@
 	async function handleFolderSelect() {
 		if (is_changed) {
 			update_config();
+			saved_folder_path = config.folder_path || '';
+			return;
 		}
 		config.folder_path = (await open({
 			directory: true,
 			multiple: false
 		})) as string;
-		saved_folder_path = config.folder_path || '';
 	}
 </script>
 
