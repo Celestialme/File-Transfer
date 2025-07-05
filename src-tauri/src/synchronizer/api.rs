@@ -63,7 +63,7 @@ pub fn upload(app: tauri::AppHandle, root_path: &PathBuf, destination: &str) {
     println!("Uploading {:?}", absolute_path);
 
     let destination = destination.to_string();
-    let window = app.get_window("main").unwrap();
+    let window = app.get_window("main");
 
     std::thread::spawn(move || {
         let client = Client::new();
@@ -111,7 +111,9 @@ pub fn upload(app: tauri::AppHandle, root_path: &PathBuf, destination: &str) {
                 r#type: TransferType::Upload,
                 path: destination.clone(),
             };
-            window.emit("transfer", &transfer).unwrap();
+            if let Some(ref window) = window {
+                window.emit("transfer", &transfer).unwrap()
+            };
             TRANSFERS
                 .lock()
                 .unwrap()
@@ -131,7 +133,9 @@ pub fn upload(app: tauri::AppHandle, root_path: &PathBuf, destination: &str) {
             r#type: TransferType::Upload,
             path: destination.clone(),
         };
-        window.emit("transfer", &transfer).unwrap();
+        if let Some(window) = window {
+            window.emit("transfer", &transfer).unwrap()
+        };
         TRANSFERS
             .lock()
             .unwrap()
@@ -149,7 +153,7 @@ pub fn download(
     let server = config.server_url.to_owned();
     let root_path = root_path.clone(); // PathBuf (owned)
     let path = path.to_string();
-    let window = app.get_window("main").unwrap();
+    let window = app.get_window("main");
     std::thread::spawn(move || {
         let client = Client::new();
         let mut resp = client
@@ -193,7 +197,9 @@ pub fn download(
                 r#type: TransferType::Download,
                 path: path.to_str().unwrap().to_string(),
             };
-            window.emit("transfer", &transfer).unwrap();
+            if let Some(ref window) = window {
+                window.emit("transfer", &transfer).unwrap()
+            };
             TRANSFERS.lock().unwrap().insert(path.clone(), transfer);
             // println!("Downloaded: {} {:.2}%", path.display(), progress);
         }
@@ -209,7 +215,9 @@ pub fn download(
             r#type: TransferType::Download,
             path: path.to_str().unwrap().to_string(),
         };
-        window.emit("transfer", &transfer).unwrap();
+        if let Some(window) = window {
+            window.emit("transfer", &transfer).unwrap()
+        };
         TRANSFERS.lock().unwrap().insert(path.clone(), transfer);
     });
 }

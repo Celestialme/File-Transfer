@@ -1,15 +1,20 @@
 <script lang="ts">
 	import { config } from '$lib/store.svelte';
 	import { update_config } from '$lib/utils';
+	import { open } from '@tauri-apps/api/dialog';
 	let is_changed = $state(false);
 	let saved_folder_path = $state(config.folder_path || '');
 	$effect(() => {
 		is_changed = saved_folder_path != config.folder_path;
 	});
-	function handleFolderSelect() {
+	async function handleFolderSelect() {
 		if (is_changed) {
 			update_config();
 		}
+		config.folder_path = (await open({
+			directory: true,
+			multiple: false
+		})) as string;
 		saved_folder_path = config.folder_path || '';
 	}
 </script>
