@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { force_sync, open_folder } from '$lib/utils';
 	import { invoke } from '@tauri-apps/api';
 </script>
 
@@ -20,6 +21,7 @@
 	<button
 		class="cursor-pointer text-green-500 transition-colors hover:text-green-600"
 		title="Sincronizar"
+		onclick={force_sync}
 	>
 		<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 			<path
@@ -33,6 +35,7 @@
 	<button
 		class="cursor-pointer text-gray-600 transition-colors hover:text-gray-800"
 		title="Abrir carpeta"
+		onclick={open_folder}
 	>
 		<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 			<path

@@ -20,3 +20,10 @@ export async function save_initial_config({
 }) {
 	return await invoke('save_initial_config', { serverUrl, folderPath });
 }
+
+export async function open_folder() {
+	return await invoke('open_folder', { path: config.folder_path });
+}
+export async function force_sync() {
+	return await invoke('force_sync');
+}

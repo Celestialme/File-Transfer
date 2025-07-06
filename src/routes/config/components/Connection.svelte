@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { config } from '$lib/store.svelte';
 	import { update_config } from '$lib/utils';
-	console.log(config);
+	let error = $state('');
 </script>
 
 <p class="mb-3 block text-sm font-medium text-gray-700">Endpoint del servidor</p>
@@ -16,9 +16,13 @@
 		placeholder="Server URL ex. http://127.0.0.1:8080"
 	/>
 	<button
-		onclick={() => update_config()}
+		onclick={() => {
+			error = '';
+			update_config().catch((e) => (error = e.server));
+		}}
 		class="rounded-md bg-blue-600 px-4 py-2 text-white transition-colors duration-200 hover:bg-blue-700"
 	>
 		Gundar
 	</button>
 </div>
+<p class:invisible={!error} class=" mt-2 text-sm text-red-600">{error}</p>

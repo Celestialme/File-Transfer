@@ -1,11 +1,11 @@
 <script lang="ts">
 	import User from './components/User.svelte';
-	import Folders from './components/Folders.svelte';
+	import Folder from './components/Folder.svelte';
 	import Connection from './components/Connection.svelte';
 	import Sync from './components/Sync.svelte';
 	const tabs = $state([
 		{ label: '🔐 Usuario y autenticación', component: User },
-		{ label: '📁 Carpetas', component: Folders },
+		{ label: '📁 Carpetas', component: Folder },
 		{ label: '🌐 Conexión', component: Connection },
 		{ label: '🔄 Sincronización', component: Sync }
 	]);

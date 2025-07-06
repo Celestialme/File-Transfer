@@ -3,13 +3,14 @@
 	import { update_config } from '$lib/utils';
 	import { open } from '@tauri-apps/api/dialog';
 	let is_changed = $state(false);
+	let error = $state('');
 	let saved_folder_path = $state(config.folder_path || '');
 	$effect(() => {
 		is_changed = saved_folder_path != config.folder_path;
 	});
 	async function handleFolderSelect() {
 		if (is_changed) {
-			update_config();
+			await update_config().catch((e) => (error = e.folder));
 			saved_folder_path = config.folder_path || '';
 			return;
 		}
@@ -39,3 +40,4 @@
 		{/if}
 	</button>
 </div>
+<p class:invisible={!error} class=" mt-2 text-sm text-red-600">{error}</p>

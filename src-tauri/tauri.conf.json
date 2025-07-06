@@ -58,6 +58,10 @@
 		"updater": {
 			"active": false
 		},
-		"windows": []
+		"windows": [],
+		"systemTray": {
+			"iconPath": "icons/icon.png",
+			"iconAsTemplate": true
+		}
 	}
 }

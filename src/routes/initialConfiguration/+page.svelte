@@ -4,10 +4,17 @@
 	let isLoading = $state(false);
 	let serverUrl = $state('');
 	let folderPath = $state('');
+	let error = $state({
+		server: '',
+		folder: ''
+	});
 	async function submit(e: Event) {
 		e.preventDefault();
 		isLoading = true;
-		await save_initial_config({ serverUrl, folderPath });
+		await save_initial_config({ serverUrl, folderPath }).catch((e) => {
+			console.log(e);
+			error = e;
+		});
 		isLoading = false;
 	}
 </script>
@@ -44,6 +51,7 @@
 					required
 					disabled={isLoading}
 				/>
+				<p class:invisible={!error.server} class=" mt-2 text-sm text-red-600">{error.server}</p>
 			</div>
 
 			<div>
@@ -88,6 +96,7 @@
 						Examinar
 					</button>
 				</div>
+				<p class:invisible={!error.folder} class=" mt-2 text-sm text-red-600">{error.folder}</p>
 			</div>
 
 			<button

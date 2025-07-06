@@ -22,8 +22,9 @@ pub fn rename(path: &str, destination: &str) {
         .json(&json!({
             "path": path,
             "destination": destination,
-            "socket_id":*SOCKET_ID.lock().unwrap()
         }))
+        .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
+        .header("Token", config.token.as_ref().unwrap())
         .send()
         .unwrap();
 }
@@ -36,8 +37,9 @@ pub fn create_folder(path: &str) {
         .post(format!("{server}/createFolder"))
         .json(&json!({
             "destination": path,
-            "socket_id":*SOCKET_ID.lock().unwrap()
         }))
+        .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
+        .header("Token", config.token.as_ref().unwrap())
         .send()
         .unwrap();
 }
@@ -49,9 +51,10 @@ pub fn delete(path: &str) {
     let _ = client
         .post(format!("{server}/delete"))
         .json(&json!({
-            "path": path,
-            "socket_id":*SOCKET_ID.lock().unwrap()
+            "path": path
         }))
+        .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
+        .header("Token", config.token.as_ref().unwrap())
         .send()
         .unwrap();
 }
@@ -92,8 +95,8 @@ pub fn upload(app: tauri::AppHandle, root_path: &PathBuf, destination: &str) {
             .header("Content-Type", "application/octet-stream")
             .header("Socket-ID", SOCKET_ID.lock().unwrap().to_string())
             .header("Destination", destination_encoded)
-            .header("Content-Length", file_size.to_string());
-
+            .header("Content-Length", file_size.to_string())
+            .header("Token", config.token.as_ref().unwrap());
         // Read file in chunks and build the body
         let mut body_data = Vec::new();
         loop {
@@ -159,6 +162,8 @@ pub fn download(
         let mut resp = client
             .post(format!("{server}/download"))
             .json(&json!({"path": path}))
+            .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
+            .header("Token", config.token.as_ref().unwrap())
             .send()
             .unwrap();
         let total_size = resp
