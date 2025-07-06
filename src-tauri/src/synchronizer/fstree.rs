@@ -52,7 +52,7 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
                     hash: "".to_string(),
                     content: None,
                     path: Some(relative.to_string_lossy().to_string()),
-                    id: Some(Uuid::new_v4().to_string()),
+                    id: None,
                 })
             }
         };
@@ -63,7 +63,7 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
             hash,
             content: None,
             path: Some(relative.to_string_lossy().to_string()),
-            id: Some(Uuid::new_v4().to_string()),
+            id: None,
         })
     } else if path.is_dir() {
         let mut children: BTreeMap<String, Node> = BTreeMap::new();
@@ -90,7 +90,7 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
             hash: folder_hash,
             content: Some(children),
             path: Some(relative.to_string_lossy().to_string()),
-            id: Some(Uuid::new_v4().to_string()),
+            id: None,
         })
     } else {
         println!("Unsupported file type: {}", path.display());
@@ -330,7 +330,7 @@ impl Node {
                                 .map(|p| Path::new(p).join(key).to_str().unwrap().to_string())
                                 .unwrap_or_else(|| key.clone()),
                         ),
-                        id: Some(Uuid::new_v4().to_string()),
+                        id: None,
                     });
 
                     if child.node_type != NodeType::Folder {

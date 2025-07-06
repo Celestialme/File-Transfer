@@ -18,7 +18,6 @@ use tungstenite::{http::Uri, ClientRequestBuilder};
 mod api;
 mod debouncer;
 mod fstree;
-
 static IGNORE_LIST: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 pub static TRANSFERS: LazyLock<Mutex<HashMap<PathBuf, Transfer>>> =
@@ -199,8 +198,16 @@ fn handle_msg(
             }
         }
     }
-
-    fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
+    let mut changes: Vec<fstree::Change> = Vec::new();
+    fstree::diff_trees(
+        "",
+        Some(&local_tree.lock().unwrap()),
+        Some(&remote_tree),
+        &mut changes,
+    );
+    if changes.is_empty() {
+        fstree::save_tree(&remote_tree, "tree.json").unwrap();
+    }
 }
 pub fn stop() {
     let _ = WATCHER.lock().unwrap().take();

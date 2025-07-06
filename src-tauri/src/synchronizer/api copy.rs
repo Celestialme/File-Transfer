@@ -1,5 +1,3 @@
-use futures_util::TryStreamExt;
-use read_progress_stream::ReadProgressStream;
 use reqwest::blocking::Client;
 use serde_json::json;
 use std::path::Path;
@@ -9,13 +7,12 @@ use std::{
     io::{self, Read, Write},
     path::PathBuf,
 };
-use tauri::async_runtime::block_on;
 use tauri::Manager;
-use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::synchronizer::{fstree, IGNORE_LIST, SOCKET_ID, TRANSFERS};
 use crate::types::{Transfer, TransferState, TransferType};
 use crate::CONFIG;
+
 pub fn rename(path: &str, destination: &str) {
     let client = Client::new();
     let config = CONFIG.lock().unwrap();
@@ -70,33 +67,15 @@ pub fn upload(app: tauri::AppHandle, root_path: &PathBuf, destination: &str) {
 
     let destination = destination.to_string();
     let window = app.get_window("main");
-    block_on(async move {
-        let client = reqwest::Client::new();
-        let file = tokio::fs::File::open(&absolute_path).await.unwrap();
-        let file_size = file.metadata().await.unwrap().len();
-        let stream = FramedRead::new(file, BytesCodec::new()).map_ok(|r| r.freeze());
-        let _destination = destination.clone();
-        let _window = window.clone();
-        let body = reqwest::Body::wrap_stream(ReadProgressStream::new(
-            stream,
-            Box::new(move |_, total| {
-                let progress = ((total as f64 / file_size as f64) * 100.0) as u8;
-                println!("progress: {}", progress);
-                let transfer = Transfer {
-                    progress: progress as u32,
-                    state: TransferState::Active,
-                    r#type: TransferType::Upload,
-                    path: _destination.clone(),
-                };
-                if let Some(ref window) = _window {
-                    window.emit("transfer", &transfer).unwrap()
-                };
-                TRANSFERS
-                    .lock()
-                    .unwrap()
-                    .insert(_destination.clone().into(), transfer);
-            }),
-        ));
+
+    std::thread::spawn(move || {
+        let client = Client::new();
+
+        // Open the file and get its size
+        let mut file = File::open(&absolute_path).unwrap();
+        let file_size = file.metadata().unwrap().len();
+
+        // Add to transfers with initial state
         TRANSFERS.lock().unwrap().insert(
             destination.clone().into(),
             Transfer {
@@ -106,17 +85,50 @@ pub fn upload(app: tauri::AppHandle, root_path: &PathBuf, destination: &str) {
                 path: destination.clone(),
             },
         );
+
+        let mut uploaded: u64 = 0;
+        let mut buffer = [0; 8192]; // 8KB buffer
         let destination_encoded: String = urlencoding::encode(&destination).to_string();
-        let _ = client
+        // Create the request with headers
+        let request = client
             .post(format!("{server}/upload"))
             .header("Content-Type", "application/octet-stream")
             .header("Socket-ID", SOCKET_ID.lock().unwrap().to_string())
             .header("Destination", destination_encoded)
             .header("Content-Length", file_size.to_string())
-            .header("Token", config.token.as_ref().unwrap())
-            .body(body)
-            .send()
-            .await;
+            .header("Token", config.token.as_ref().unwrap());
+        // Read file in chunks and build the body
+        let mut body_data = Vec::new();
+        loop {
+            let n = file.read(&mut buffer).unwrap();
+            if n == 0 {
+                break;
+            }
+            body_data.extend_from_slice(&buffer[..n]);
+            uploaded += n as u64;
+
+            let progress = (uploaded as f64 / file_size as f64) * 100.0;
+            let transfer = Transfer {
+                progress: progress as u32,
+                state: TransferState::Active,
+                r#type: TransferType::Upload,
+                path: destination.clone(),
+            };
+            if let Some(ref window) = window {
+                window.emit("transfer", &transfer).unwrap()
+            };
+            TRANSFERS
+                .lock()
+                .unwrap()
+                .insert(destination.clone().into(), transfer);
+
+            // Add a small delay to show progress (optional)
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Send the request with the body
+        let _response = request.body(body_data).send().unwrap();
+
         // Mark as completed
         let transfer = Transfer {
             progress: 100,
@@ -147,16 +159,13 @@ pub fn download(
     let window = app.get_window("main");
     std::thread::spawn(move || {
         let client = Client::new();
-        let resp = client
+        let mut resp = client
             .post(format!("{server}/download"))
             .json(&json!({"path": path}))
             .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
             .header("Token", config.token.as_ref().unwrap())
-            .send();
-        if resp.is_err() || !resp.as_ref().unwrap().status().is_success() {
-            return;
-        }
-        let mut resp = resp.unwrap();
+            .send()
+            .unwrap();
         let total_size = resp
             .content_length()
             .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Missing content length"))
