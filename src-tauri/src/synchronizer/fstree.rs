@@ -3,7 +3,6 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -20,7 +19,7 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<BTreeMap<String, Node>>,
     pub path: Option<String>, // relative from root
-    id: Option<String>,
+    pub id: Option<String>,
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -111,6 +110,7 @@ pub enum ChangeType {
 
 #[derive(Debug, Clone)]
 pub struct Change {
+    pub id: Option<String>,
     pub node_type: NodeType,
     pub path: String, // 'to' path if renamed
     pub change_type: ChangeType,
@@ -127,6 +127,7 @@ pub fn diff_trees(
         (Some(node_1), Some(node_2)) => {
             if node_1.node_type != node_2.node_type {
                 changes.push(Change {
+                    id: node_1.id.clone(),
                     node_type: node_2.node_type.clone(),
                     path: path.to_string(),
                     change_type: ChangeType::Modified,
@@ -139,6 +140,7 @@ pub fn diff_trees(
                 && node_2.node_type == NodeType::File
             {
                 changes.push(Change {
+                    id: node_1.id.clone(),
                     node_type: node_2.node_type.clone(),
                     path: path.to_string(),
                     change_type: ChangeType::Modified,
@@ -164,6 +166,7 @@ pub fn diff_trees(
         }
         (None, Some(new)) => {
             changes.push(Change {
+                id: None,
                 node_type: new.node_type.clone(),
                 path: path.to_string(),
                 change_type: ChangeType::Added,
@@ -186,6 +189,7 @@ pub fn diff_trees(
         }
         (Some(old), None) => {
             changes.push(Change {
+                id: old.id.clone(),
                 node_type: old.node_type.clone(),
                 path: path.to_string(),
                 change_type: ChangeType::Deleted,
@@ -225,6 +229,7 @@ pub fn detect_renames(mut changes: Vec<Change>) -> Vec<Change> {
             }) {
                 let del = deleted.remove(pos);
                 final_changes.push(Change {
+                    id: del.id.clone(),
                     node_type: add.node_type.clone(),
                     path: add.path,
                     change_type: ChangeType::Renamed { from: del.path },

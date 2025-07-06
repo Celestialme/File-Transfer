@@ -1,4 +1,5 @@
 use crate::{types::Transfer, CONFIG};
+use futures_util::future::join_all;
 use futures_util::StreamExt;
 use notify::{
     event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
@@ -7,6 +8,7 @@ use notify::{
 use std::{
     collections::{HashMap, HashSet},
     sync::LazyLock,
+    vec,
 };
 use std::{
     path::{Path, PathBuf},
@@ -71,7 +73,8 @@ pub fn start(app: tauri::AppHandle) {
                                         &root_path,
                                         &app,
                                         tungstenite::Message::Text(text),
-                                    );
+                                    )
+                                    .await;
                                 }
                                 Ok(_) => {}
                                 Err(e) => {
@@ -116,7 +119,7 @@ pub fn start(app: tauri::AppHandle) {
     });
 }
 
-fn handle_msg(
+async fn handle_msg(
     local_tree: &Arc<Mutex<fstree::Node>>,
     root_path: &PathBuf,
     app: &tauri::AppHandle,
@@ -125,13 +128,13 @@ fn handle_msg(
     let text = msg.to_string();
     println!("Received new tree");
     let mut changes: Vec<fstree::Change> = Vec::new();
-    let remote_tree: fstree::Node = serde_json::from_str(&text).unwrap();
+    let mut remote_tree: fstree::Node = serde_json::from_str(&text).unwrap();
 
     {
         let local = local_tree.lock().unwrap();
         fstree::diff_trees("", Some(&local), Some(&remote_tree), &mut changes);
     }
-
+    let mut futures = vec![];
     let changes = fstree::detect_renames(changes);
     println!("changes: {:?}", changes);
     for change in changes {
@@ -139,12 +142,12 @@ fn handle_msg(
             fstree::ChangeType::Added => match change.node_type {
                 fstree::NodeType::File => {
                     println!("add {}", change.path);
-                    api::download(
+                    futures.push(api::download(
                         app.app_handle().clone(),
                         root_path,
-                        &change.path,
+                        change.path,
                         local_tree.clone(),
-                    );
+                    ));
                 }
                 fstree::NodeType::Folder => {
                     std::fs::create_dir_all(Path::new(root_path).join(&change.path)).unwrap();
@@ -188,16 +191,15 @@ fn handle_msg(
                     )
                     .unwrap();
             }
-            fstree::ChangeType::Modified => {
-                api::download(
-                    app.app_handle().clone(),
-                    root_path,
-                    &change.path,
-                    local_tree.clone(),
-                );
-            }
+            fstree::ChangeType::Modified => futures.push(api::download(
+                app.app_handle().clone(),
+                root_path,
+                change.path,
+                local_tree.clone(),
+            )),
         }
     }
+    join_all(futures).await;
     let mut changes: Vec<fstree::Change> = Vec::new();
     fstree::diff_trees(
         "",
@@ -205,8 +207,10 @@ fn handle_msg(
         Some(&remote_tree),
         &mut changes,
     );
+    remote_tree.path = Some(root_path.to_str().unwrap().to_string());
+    *local_tree.lock().unwrap() = remote_tree;
     if changes.is_empty() {
-        fstree::save_tree(&remote_tree, "tree.json").unwrap();
+        fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
     }
 }
 pub fn stop() {
@@ -219,7 +223,6 @@ fn handle_event(
     root_path: PathBuf,
     debouncer: &debouncer::Debouncer,
 ) {
-    println!("detect");
     for path in event.paths.iter() {
         if IGNORE_LIST.lock().unwrap().contains(path.as_path()) {
             return;
@@ -236,10 +239,11 @@ fn handle_event(
             tree.lock().unwrap().add_node(node).unwrap();
         }
         val if val.kind == EventKind::Remove(RemoveKind::Any) => {
-            tree.lock()
+            let _ = tree
+                .lock()
                 .unwrap()
                 .delete_node(&val.paths[0].to_str().unwrap())
-                .unwrap();
+                .map_err(|_| println!("failed to delete {:#?}", val));
         }
         val if val.kind == EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
             tree.lock()
@@ -280,12 +284,25 @@ fn handle_event(
 
             match change.change_type {
                 fstree::ChangeType::Added => match change.node_type {
-                    fstree::NodeType::File => api::upload(app.clone(), &root_path, &change.path),
+                    fstree::NodeType::File => {
+                        api::upload(app.clone(), change.id, &root_path, &change.path)
+                    }
                     fstree::NodeType::Folder => api::create_folder(&change.path),
                 },
-                fstree::ChangeType::Deleted => api::delete(&change.path),
-                fstree::ChangeType::Renamed { from } => api::rename(&from, &change.path),
-                fstree::ChangeType::Modified => api::upload(app.clone(), &root_path, &change.path),
+                fstree::ChangeType::Deleted => api::delete(change.id, &change.path),
+                fstree::ChangeType::Renamed { from } => {
+                    let mut node =
+                        fstree::build_node(&Path::new(&root_path), &root_path.join(&change.path))
+                            .unwrap();
+
+                    node.id = change.id;
+                    tree.lock().unwrap().add_node(node).unwrap();
+                    fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
+                    api::rename(&from, &change.path)
+                }
+                fstree::ChangeType::Modified => {
+                    api::upload(app.clone(), change.id, &root_path, &change.path)
+                }
             }
         }
     })
