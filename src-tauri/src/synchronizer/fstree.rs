@@ -20,6 +20,7 @@ pub struct Node {
     content: Option<BTreeMap<String, Node>>,
     pub path: Option<String>, // relative from root
     pub id: Option<String>,
+    pub parent_id: Option<String>,
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -52,6 +53,7 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
                     content: None,
                     path: Some(relative.to_string_lossy().to_string()),
                     id: None,
+                    parent_id: None,
                 })
             }
         };
@@ -63,6 +65,7 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
             content: None,
             path: Some(relative.to_string_lossy().to_string()),
             id: None,
+            parent_id: None,
         })
     } else if path.is_dir() {
         let mut children: BTreeMap<String, Node> = BTreeMap::new();
@@ -90,6 +93,7 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
             content: Some(children),
             path: Some(relative.to_string_lossy().to_string()),
             id: None,
+            parent_id: None,
         })
     } else {
         println!("Unsupported file type: {}", path.display());
@@ -111,6 +115,7 @@ pub enum ChangeType {
 #[derive(Debug, Clone)]
 pub struct Change {
     pub id: Option<String>,
+    pub parent_id: Option<String>,
     pub node_type: NodeType,
     pub path: String, // 'to' path if renamed
     pub change_type: ChangeType,
@@ -128,6 +133,7 @@ pub fn diff_trees(
             if node_1.node_type != node_2.node_type {
                 changes.push(Change {
                     id: node_1.id.clone(),
+                    parent_id: node_1.parent_id.clone(),
                     node_type: node_2.node_type.clone(),
                     path: path.to_string(),
                     change_type: ChangeType::Modified,
@@ -141,6 +147,7 @@ pub fn diff_trees(
             {
                 changes.push(Change {
                     id: node_1.id.clone(),
+                    parent_id: node_1.parent_id.clone(),
                     node_type: node_2.node_type.clone(),
                     path: path.to_string(),
                     change_type: ChangeType::Modified,
@@ -166,7 +173,8 @@ pub fn diff_trees(
         }
         (None, Some(new)) => {
             changes.push(Change {
-                id: None,
+                id: new.id.clone(),
+                parent_id: new.parent_id.clone(),
                 node_type: new.node_type.clone(),
                 path: path.to_string(),
                 change_type: ChangeType::Added,
@@ -190,6 +198,7 @@ pub fn diff_trees(
         (Some(old), None) => {
             changes.push(Change {
                 id: old.id.clone(),
+                parent_id: old.parent_id.clone(),
                 node_type: old.node_type.clone(),
                 path: path.to_string(),
                 change_type: ChangeType::Deleted,
@@ -230,6 +239,7 @@ pub fn detect_renames(mut changes: Vec<Change>) -> Vec<Change> {
                 let del = deleted.remove(pos);
                 final_changes.push(Change {
                     id: del.id.clone(),
+                    parent_id: add.parent_id.clone(),
                     node_type: add.node_type.clone(),
                     path: add.path,
                     change_type: ChangeType::Renamed { from: del.path },
@@ -311,17 +321,17 @@ impl Node {
         self._add_path(&parts, new_node)
     }
 
-    fn _add_path(&mut self, parts: &[String], new_node: Node) -> Result<(), String> {
+    fn _add_path(&mut self, parts: &[String], mut new_node: Node) -> Result<(), String> {
         if parts.is_empty() {
             return Err("Cannot add node at empty path".into());
         }
-
         match &mut self.content {
             Some(children) => {
                 let key = &parts[0];
 
                 if parts.len() == 1 {
                     // Insert the new node
+                    new_node.parent_id = self.id.clone();
                     children.insert(key.clone(), new_node);
                 } else {
                     // Recurse into subfolder
@@ -336,6 +346,7 @@ impl Node {
                                 .unwrap_or_else(|| key.clone()),
                         ),
                         id: None,
+                        parent_id: Some("vitomID".to_string()),
                     });
 
                     if child.node_type != NodeType::Folder {

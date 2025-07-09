@@ -1,5 +1,5 @@
+use crate::synchronizer::fstree;
 use serde::{Deserialize, Serialize};
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub username: Option<String>,
@@ -45,7 +45,9 @@ pub enum TransferState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LoginResponse {
-    pub token: String,
-    pub refresh_token: String,
+pub struct SocketResponse {
+    pub message: String,
+    pub data: fstree::Node,
+    pub timestamp: u64,
+    pub r#type: String,
 }

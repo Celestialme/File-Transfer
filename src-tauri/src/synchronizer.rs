@@ -1,4 +1,7 @@
-use crate::{types::Transfer, CONFIG};
+use crate::{
+    types::{SocketResponse, Transfer},
+    CONFIG,
+};
 use futures_util::future::join_all;
 use futures_util::StreamExt;
 use notify::{
@@ -19,7 +22,7 @@ use tokio_tungstenite::{self, connect_async};
 use tungstenite::{http::Uri, ClientRequestBuilder};
 mod api;
 mod debouncer;
-mod fstree;
+pub(crate) mod fstree;
 static IGNORE_LIST: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 pub static TRANSFERS: LazyLock<Mutex<HashMap<PathBuf, Transfer>>> =
@@ -53,14 +56,18 @@ pub fn start(app: tauri::AppHandle) {
 
             loop {
                 let config = CONFIG.lock().unwrap().clone();
-                let server = config.server_url;
+                let socket_url = format!(
+                    "{}/websocket",
+                    config
+                        .server_url
+                        .replace("https://", "ws://")
+                        .replace("http://", "ws://")
+                );
                 let socket_id = SOCKET_ID.lock().unwrap().clone();
-                let uri: Uri = server
-                    .replace("https://", "wss://")
-                    .replace("http://", "ws://")
-                    .parse()
-                    .unwrap();
-                let request = ClientRequestBuilder::new(uri).with_header("socket_id", &socket_id);
+                let uri: Uri = socket_url.parse().unwrap();
+                let request = ClientRequestBuilder::new(uri)
+                    .with_header("socket_id", &socket_id)
+                    .with_header("authorization", &config.token.unwrap());
                 match connect_async(request).await {
                     Ok((mut socket, _response)) => {
                         println!("Connected to server");
@@ -128,8 +135,8 @@ async fn handle_msg(
     let text = msg.to_string();
     println!("Received new tree");
     let mut changes: Vec<fstree::Change> = Vec::new();
-    let mut remote_tree: fstree::Node = serde_json::from_str(&text).unwrap();
-
+    let resp: SocketResponse = serde_json::from_str(&text).unwrap();
+    let mut remote_tree = resp.data;
     {
         let local = local_tree.lock().unwrap();
         fstree::diff_trees("", Some(&local), Some(&remote_tree), &mut changes);
@@ -146,6 +153,7 @@ async fn handle_msg(
                         app.app_handle().clone(),
                         root_path,
                         change.path,
+                        change.id,
                         local_tree.clone(),
                     ));
                 }
@@ -195,6 +203,7 @@ async fn handle_msg(
                 app.app_handle().clone(),
                 root_path,
                 change.path,
+                change.id,
                 local_tree.clone(),
             )),
         }
@@ -243,7 +252,7 @@ fn handle_event(
                 .lock()
                 .unwrap()
                 .delete_node(&val.paths[0].to_str().unwrap())
-                .map_err(|_| println!("failed to delete {:#?}", val));
+                .map_err(|_| println!("failed to delete {:#?}", val.paths[0].to_str().unwrap()));
         }
         val if val.kind == EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
             tree.lock()
@@ -252,12 +261,13 @@ fn handle_event(
                 .unwrap();
         }
         val if val.kind == EventKind::Modify(ModifyKind::Name(RenameMode::To))
-            || val.kind == EventKind::Modify(ModifyKind::Any) =>
+            || (val.kind == EventKind::Modify(ModifyKind::Any)) =>
         {
-            let node = fstree::build_node(
-                &root_path,
-                std::path::Path::new(&val.paths[0].to_str().unwrap()),
-            );
+            let path = std::path::Path::new(val.paths[0].to_str().unwrap());
+            if path.is_dir() {
+                return;
+            }
+            let node = fstree::build_node(&root_path, path);
             if node.is_ok() {
                 tree.lock().unwrap().add_node(node.unwrap()).unwrap();
             }
@@ -284,9 +294,13 @@ fn handle_event(
 
             match change.change_type {
                 fstree::ChangeType::Added => match change.node_type {
-                    fstree::NodeType::File => {
-                        api::upload(app.clone(), change.id, &root_path, &change.path)
-                    }
+                    fstree::NodeType::File => api::upload(
+                        app.clone(),
+                        change.id,
+                        change.parent_id,
+                        &root_path,
+                        &change.path,
+                    ),
                     fstree::NodeType::Folder => api::create_folder(&change.path),
                 },
                 fstree::ChangeType::Deleted => api::delete(change.id, &change.path),
@@ -295,14 +309,18 @@ fn handle_event(
                         fstree::build_node(&Path::new(&root_path), &root_path.join(&change.path))
                             .unwrap();
 
+                    api::rename(change.id.clone(), change.parent_id, &from, &change.path);
                     node.id = change.id;
                     tree.lock().unwrap().add_node(node).unwrap();
                     fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
-                    api::rename(&from, &change.path)
                 }
-                fstree::ChangeType::Modified => {
-                    api::upload(app.clone(), change.id, &root_path, &change.path)
-                }
+                fstree::ChangeType::Modified => api::upload(
+                    app.clone(),
+                    change.id,
+                    change.parent_id,
+                    &root_path,
+                    &change.path,
+                ),
             }
         }
     })

@@ -18,7 +18,7 @@ use tauri_plugin_positioner::{Position, WindowExt};
 
 use crate::{
     synchronizer::TRANSFERS,
-    types::{Config, LoginResponse, TransferState},
+    types::{Config, TransferState},
 };
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
 
@@ -245,12 +245,11 @@ async fn save_initial_config(
     let app_dir = app.path_resolver().app_data_dir().unwrap();
     let config_path = app_dir.join("config.json");
     let client = Client::new();
-
+    let server_url = server_url.trim_end_matches('/').to_owned();
     let resp = client
-        .get(format!("{server_url}/health/check"))
+        .get(format!("{server_url}/actuator/health"))
         .send()
         .await;
-
     let folder_exists = Path::new(&folder_path).exists();
     let mut error_map = HashMap::new();
     if resp.is_err() || !resp.unwrap().status().is_success() {
@@ -292,7 +291,7 @@ async fn login(app: AppHandle, username: String, password: String) -> Result<(),
     let login_window = app.get_window("Login").unwrap();
     let client = Client::new();
     let resp = client
-        .post(format!("{server}/login"))
+        .post(format!("{server}/users/auth/login"))
         .json(&json!({"username": username, "password": password}))
         .send()
         .await
@@ -301,15 +300,26 @@ async fn login(app: AppHandle, username: String, password: String) -> Result<(),
     if !resp.status().is_success() {
         return Err("Username or password incorrect".to_string());
     }
-    let loging_response: LoginResponse = serde_json::from_str(&resp.text().await.unwrap()).unwrap();
+
+    let token = resp
+        .headers()
+        .get("authorization")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let refresh_token = resp
+        .headers()
+        .get("x-refresh-token")
+        .unwrap()
+        .to_str()
+        .unwrap();
+
     let config = {
         let mut config = CONFIG.lock().unwrap();
         config.username.replace(username);
         config.password.replace(password);
-        config.token.replace(loging_response.token.clone());
-        config
-            .refresh_token
-            .replace(loging_response.refresh_token.clone());
+        config.token.replace(token.to_owned());
+        config.refresh_token.replace(refresh_token.to_owned());
         config.clone()
     };
     let _ = update_config(app.clone(), config).await;

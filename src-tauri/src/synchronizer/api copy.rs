@@ -1,19 +1,19 @@
+use futures_util::StreamExt;
+use futures_util::TryStreamExt;
+use read_progress_stream::ReadProgressStream;
 use reqwest::blocking::Client;
 use serde_json::json;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::{
-    fs::{self, File},
-    io::{self, Read, Write},
-    path::PathBuf,
-};
+use std::{fs, io::Write, path::PathBuf};
+use tauri::async_runtime::block_on;
 use tauri::Manager;
+use tokio_util::codec::{BytesCodec, FramedRead};
 
+use crate::force_sync;
 use crate::synchronizer::{fstree, IGNORE_LIST, SOCKET_ID, TRANSFERS};
 use crate::types::{Transfer, TransferState, TransferType};
 use crate::CONFIG;
-
-pub fn rename(path: &str, destination: &str) {
+pub fn rename(id: Option<String>, parent_id: Option<String>, path: &str, destination: &str) {
     let client = Client::new();
     let config = CONFIG.lock().unwrap();
     let server = config.server_url.to_owned();
@@ -25,8 +25,10 @@ pub fn rename(path: &str, destination: &str) {
         }))
         .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
         .header("Token", config.token.as_ref().unwrap())
+        .header("ID", id.unwrap_or_default())
+        .header("Parent-ID", parent_id.unwrap_or_default())
         .send()
-        .unwrap();
+        .map_err(|_| (println!("Failed to rename {path}")));
 }
 
 pub fn create_folder(path: &str) {
@@ -34,17 +36,17 @@ pub fn create_folder(path: &str) {
     let config = CONFIG.lock().unwrap();
     let server = config.server_url.to_owned();
     let _ = client
-        .post(format!("{server}/createFolder"))
+        .post(format!("{server}/files"))
         .json(&json!({
             "destination": path,
         }))
         .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
         .header("Token", config.token.as_ref().unwrap())
         .send()
-        .unwrap();
+        .map_err(|_| (println!("Failed to create folder {path}")));
 }
 
-pub fn delete(path: &str) {
+pub fn delete(id: Option<String>, path: &str) {
     let client = Client::new();
     let config = CONFIG.lock().unwrap();
     let server = config.server_url.to_owned();
@@ -55,174 +57,203 @@ pub fn delete(path: &str) {
         }))
         .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
         .header("Token", config.token.as_ref().unwrap())
+        .header("ID", id.unwrap_or_default())
         .send()
-        .unwrap();
+        .map_err(|_| (println!("Failed to delete {path}")));
 }
 
-pub fn upload(app: tauri::AppHandle, root_path: &PathBuf, destination: &str) {
+pub fn upload(
+    app: tauri::AppHandle,
+    id: Option<String>,
+    parent_id: Option<String>,
+    root_path: &PathBuf,
+    destination: &str,
+) {
     let config = CONFIG.lock().unwrap().clone();
+    let socket_id = SOCKET_ID.lock().unwrap().clone();
     let server = config.server_url.to_owned();
     let absolute_path = root_path.join(destination);
     println!("Uploading {:?}", absolute_path);
 
     let destination = destination.to_string();
     let window = app.get_window("main");
-
     std::thread::spawn(move || {
-        let client = Client::new();
-
-        // Open the file and get its size
-        let mut file = File::open(&absolute_path).unwrap();
-        let file_size = file.metadata().unwrap().len();
-
-        // Add to transfers with initial state
-        TRANSFERS.lock().unwrap().insert(
-            destination.clone().into(),
-            Transfer {
-                progress: 0,
-                state: TransferState::Active,
-                r#type: TransferType::Upload,
-                path: destination.clone(),
-            },
-        );
-
-        let mut uploaded: u64 = 0;
-        let mut buffer = [0; 8192]; // 8KB buffer
-        let destination_encoded: String = urlencoding::encode(&destination).to_string();
-        // Create the request with headers
-        let request = client
-            .post(format!("{server}/upload"))
-            .header("Content-Type", "application/octet-stream")
-            .header("Socket-ID", SOCKET_ID.lock().unwrap().to_string())
-            .header("Destination", destination_encoded)
-            .header("Content-Length", file_size.to_string())
-            .header("Token", config.token.as_ref().unwrap());
-        // Read file in chunks and build the body
-        let mut body_data = Vec::new();
-        loop {
-            let n = file.read(&mut buffer).unwrap();
-            if n == 0 {
-                break;
-            }
-            body_data.extend_from_slice(&buffer[..n]);
-            uploaded += n as u64;
-
-            let progress = (uploaded as f64 / file_size as f64) * 100.0;
+        block_on(async move {
+            let client = reqwest::Client::new();
+            let file = tokio::fs::File::open(&absolute_path).await.unwrap();
+            let file_size = file.metadata().await.unwrap().len();
+            let stream = FramedRead::new(file, BytesCodec::new()).map_ok(|r| r.freeze());
+            let _destination = destination.clone();
+            let _window = window.clone();
+            let body = reqwest::Body::wrap_stream(ReadProgressStream::new(
+                stream,
+                Box::new(move |_, total| {
+                    let progress = ((total as f64 / file_size as f64) * 100.0) as u8;
+                    // println!("file:{}, progress: {}", _destination, progress);
+                    let transfer = Transfer {
+                        progress: progress as u32,
+                        state: TransferState::Active,
+                        r#type: TransferType::Upload,
+                        path: _destination.clone(),
+                    };
+                    if let Some(ref window) = _window {
+                        window.emit("transfer", &transfer).unwrap()
+                    };
+                    TRANSFERS
+                        .lock()
+                        .unwrap()
+                        .insert(_destination.clone().into(), transfer);
+                }),
+            ));
+            TRANSFERS.lock().unwrap().insert(
+                destination.clone().into(),
+                Transfer {
+                    progress: 0,
+                    state: TransferState::Active,
+                    r#type: TransferType::Upload,
+                    path: destination.clone(),
+                },
+            );
+            let destination_encoded: String = urlencoding::encode(&destination).to_string();
+            let _ = client
+                .post(format!("{server}/upload"))
+                .header("Content-Type", "application/octet-stream")
+                .header("Socket-ID", socket_id)
+                .header("Destination", destination_encoded)
+                .header("Content-Length", file_size.to_string())
+                .header("Token", config.token.as_ref().unwrap())
+                .header("ID", id.unwrap_or_default())
+                .header("Parent-ID", parent_id.unwrap_or_default())
+                .body(body)
+                .send()
+                .await;
+            // Mark as completed
             let transfer = Transfer {
-                progress: progress as u32,
-                state: TransferState::Active,
+                progress: 100,
+                state: TransferState::Completed,
                 r#type: TransferType::Upload,
                 path: destination.clone(),
             };
-            if let Some(ref window) = window {
+            if let Some(window) = window {
                 window.emit("transfer", &transfer).unwrap()
             };
             TRANSFERS
                 .lock()
                 .unwrap()
                 .insert(destination.clone().into(), transfer);
-
-            // Add a small delay to show progress (optional)
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        // Send the request with the body
-        let _response = request.body(body_data).send().unwrap();
-
-        // Mark as completed
-        let transfer = Transfer {
-            progress: 100,
-            state: TransferState::Completed,
-            r#type: TransferType::Upload,
-            path: destination.clone(),
-        };
-        if let Some(window) = window {
-            window.emit("transfer", &transfer).unwrap()
-        };
-        TRANSFERS
-            .lock()
-            .unwrap()
-            .insert(destination.clone().into(), transfer);
+            force_sync(app).unwrap();
+        });
     });
 }
 
-pub fn download(
+pub async fn download(
     app: tauri::AppHandle,
     root_path: &PathBuf,
-    path: &str,
+    path: String,
     local_tree: Arc<Mutex<fstree::Node>>,
 ) {
+    let socket_id = SOCKET_ID.lock().unwrap().clone();
     let config = CONFIG.lock().unwrap().clone();
     let server = config.server_url.to_owned();
-    let root_path = root_path.clone(); // PathBuf (owned)
-    let path = path.to_string();
+    let full_path = root_path.join(&path);
+    let destination = full_path.clone();
     let window = app.get_window("main");
-    std::thread::spawn(move || {
-        let client = Client::new();
-        let mut resp = client
-            .post(format!("{server}/download"))
-            .json(&json!({"path": path}))
-            .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
-            .header("Token", config.token.as_ref().unwrap())
-            .send()
-            .unwrap();
-        let total_size = resp
-            .content_length()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Missing content length"))
-            .unwrap();
-        let path = root_path.join(path);
-        IGNORE_LIST.lock().unwrap().insert(path.clone().into());
-        TRANSFERS.lock().unwrap().insert(
-            path.clone(),
-            Transfer {
-                progress: 0,
-                state: TransferState::Active,
-                r#type: TransferType::Download,
-                path: path.to_str().unwrap().to_string(),
-            },
-        );
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut file = File::create(&path).unwrap();
+    let client = reqwest::Client::new();
 
-        let mut downloaded: u64 = 0;
-        let mut buffer = [0; 8192]; // 8KB buffer
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let n = resp.read(&mut buffer).unwrap();
-            if n == 0 {
-                break;
-            }
-            file.write_all(&buffer[..n]).unwrap();
-            downloaded += n as u64;
+    let response = client
+        .post(format!("{server}/download"))
+        .json(&json!({ "path": path }))
+        .header("Socket-ID", socket_id)
+        .header("Token", config.token.as_ref().unwrap())
+        .send()
+        .await;
 
-            let progress = (downloaded as f64 / total_size as f64) * 100.0;
-            let transfer = Transfer {
-                progress: progress as u32,
-                state: TransferState::Active,
-                r#type: TransferType::Download,
-                path: path.to_str().unwrap().to_string(),
-            };
-            if let Some(ref window) = window {
-                window.emit("transfer", &transfer).unwrap()
-            };
-            TRANSFERS.lock().unwrap().insert(path.clone(), transfer);
-            // println!("Downloaded: {} {:.2}%", path.display(), progress);
+    let resp = match response {
+        Ok(r) if r.status().is_success() => r,
+        _ => return, // early return on error or non-2xx
+    };
+
+    let total_size = match resp.content_length() {
+        Some(size) => size,
+        None => {
+            eprintln!("Missing content length");
+            return;
         }
-        let node = fstree::build_node(&Path::new(&root_path), &root_path.join(&path));
-        local_tree.lock().unwrap().add_node(node.unwrap()).unwrap();
-        fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
-        drop(file);
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-        IGNORE_LIST.lock().unwrap().remove(path.as_path());
-        let transfer = Transfer {
-            progress: 100,
-            state: TransferState::Completed,
+    };
+
+    IGNORE_LIST
+        .lock()
+        .unwrap()
+        .insert(destination.clone().into());
+
+    TRANSFERS.lock().unwrap().insert(
+        destination.clone(),
+        Transfer {
+            progress: 0,
+            state: TransferState::Active,
             r#type: TransferType::Download,
-            path: path.to_str().unwrap().to_string(),
+            path: destination.to_string_lossy().to_string(),
+        },
+    );
+
+    // Ensure parent directories exist
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+
+    let mut file = fs::File::create(&destination).unwrap();
+    let mut downloaded: u64 = 0;
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = match chunk_result {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error downloading chunk: {e}");
+                return;
+            }
         };
-        if let Some(window) = window {
-            window.emit("transfer", &transfer).unwrap()
+        file.write_all(&chunk).unwrap();
+        downloaded += chunk.len() as u64;
+
+        let progress = (downloaded as f64 / total_size as f64) * 100.0;
+        // println!(
+        //     "file:{}, progress: {}",
+        //     destination.to_string_lossy().to_string(),
+        //     progress
+        // );
+        let transfer = Transfer {
+            progress: progress as u32,
+            state: TransferState::Active,
+            r#type: TransferType::Download,
+            path: destination.to_string_lossy().to_string(),
         };
-        TRANSFERS.lock().unwrap().insert(path.clone(), transfer);
-    });
+        if let Some(ref window) = window {
+            window.emit("transfer", &transfer).unwrap();
+        }
+        TRANSFERS
+            .lock()
+            .unwrap()
+            .insert(destination.clone(), transfer);
+    }
+
+    // Add to local tree
+    if let Ok(Some(node)) = fstree::build_node(&root_path, &destination).map(Some) {
+        local_tree.lock().unwrap().add_node(node).unwrap();
+        fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    IGNORE_LIST.lock().unwrap().remove(destination.as_path());
+
+    let transfer = Transfer {
+        progress: 100,
+        state: TransferState::Completed,
+        r#type: TransferType::Download,
+        path: destination.to_string_lossy().to_string(),
+    };
+    if let Some(window) = window {
+        window.emit("transfer", &transfer).unwrap()
+    };
+    TRANSFERS.lock().unwrap().insert(destination, transfer);
 }
