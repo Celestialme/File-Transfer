@@ -6,7 +6,7 @@ use futures_util::future::join_all;
 use futures_util::StreamExt;
 use notify::{
     event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
-    Event, EventKind, RecursiveMode, Result, Watcher,
+    Event, EventKind, RecommendedWatcher, RecursiveMode, Result, Watcher,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -28,7 +28,7 @@ static IGNORE_LIST: LazyLock<Mutex<HashSet<PathBuf>>> =
 pub static TRANSFERS: LazyLock<Mutex<HashMap<PathBuf, Transfer>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static SOCKET_ID: Mutex<String> = Mutex::new(String::new());
-static WATCHER: Mutex<Option<notify::ReadDirectoryChangesWatcher>> = Mutex::new(None);
+static WATCHER: Mutex<Option<RecommendedWatcher>> = Mutex::new(None);
 pub fn start(app: tauri::AppHandle) {
     tokio::spawn(async move {
         let config = CONFIG.lock().unwrap().clone();
