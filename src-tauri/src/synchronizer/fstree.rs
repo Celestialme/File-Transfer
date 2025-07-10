@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -19,8 +20,8 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<BTreeMap<String, Node>>,
     pub path: Option<String>, // relative from root
-    pub id: Option<String>,
-    pub parent_id: Option<String>,
+    pub id: Arc<Mutex<Option<String>>>,
+    pub parent_id: Arc<Mutex<Option<String>>>,
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -52,8 +53,8 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
                     hash: "".to_string(),
                     content: None,
                     path: Some(relative.to_string_lossy().to_string()),
-                    id: None,
-                    parent_id: None,
+                    id: Arc::new(Mutex::new(None)),
+                    parent_id: Arc::new(Mutex::new(None)),
                 })
             }
         };
@@ -64,8 +65,8 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
             hash,
             content: None,
             path: Some(relative.to_string_lossy().to_string()),
-            id: None,
-            parent_id: None,
+            id: Arc::new(Mutex::new(None)),
+            parent_id: Arc::new(Mutex::new(None)),
         })
     } else if path.is_dir() {
         let mut children: BTreeMap<String, Node> = BTreeMap::new();
@@ -92,8 +93,8 @@ fn _build_tree(path: &Path, relative: &Path) -> std::io::Result<Node> {
             hash: folder_hash,
             content: Some(children),
             path: Some(relative.to_string_lossy().to_string()),
-            id: None,
-            parent_id: None,
+            id: Arc::new(Mutex::new(None)),
+            parent_id: Arc::new(Mutex::new(None)),
         })
     } else {
         println!("Unsupported file type: {}", path.display());
@@ -114,8 +115,8 @@ pub enum ChangeType {
 
 #[derive(Debug, Clone)]
 pub struct Change {
-    pub id: Option<String>,
-    pub parent_id: Option<String>,
+    pub id: Arc<Mutex<Option<String>>>,
+    pub parent_id: Arc<Mutex<Option<String>>>,
     pub node_type: NodeType,
     pub path: String, // 'to' path if renamed
     pub change_type: ChangeType,
@@ -208,6 +209,7 @@ pub fn diff_trees(
 
         (None, None) => {}
     }
+    sort_changes(changes);
 }
 
 pub fn detect_renames(mut changes: Vec<Change>) -> Vec<Change> {
@@ -345,8 +347,8 @@ impl Node {
                                 .map(|p| Path::new(p).join(key).to_str().unwrap().to_string())
                                 .unwrap_or_else(|| key.clone()),
                         ),
-                        id: None,
-                        parent_id: Some("vitomID".to_string()),
+                        id: Arc::new(Mutex::new(None)),
+                        parent_id: Arc::new(Mutex::new(None)),
                     });
 
                     if child.node_type != NodeType::Folder {
@@ -391,4 +393,25 @@ pub fn save_tree(node: &Node, path: &str) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(node)?;
     fs::write(path, json)?;
     Ok(())
+}
+
+fn sort_changes(changes: &mut Vec<Change>) {
+    changes.sort_by(|a, b| {
+        // 1. Folder before file
+        let node_type_cmp = match (&a.node_type, &b.node_type) {
+            (NodeType::Folder, NodeType::File) => std::cmp::Ordering::Greater,
+            (NodeType::File, NodeType::Folder) => std::cmp::Ordering::Less,
+            _ => std::cmp::Ordering::Equal,
+        };
+
+        if node_type_cmp != std::cmp::Ordering::Equal {
+            return node_type_cmp;
+        }
+
+        // 2. Depth (shorter path first) — assumes UNIX-style paths
+        let a_depth = a.path.matches(&['/', '\\'][..]).count();
+        let b_depth = b.path.matches(&['/', '\\'][..]).count();
+
+        b_depth.cmp(&a_depth)
+    });
 }

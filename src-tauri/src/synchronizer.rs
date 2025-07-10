@@ -56,6 +56,12 @@ pub fn start(app: tauri::AppHandle) {
 
             loop {
                 let config = CONFIG.lock().unwrap().clone();
+                let token = config.token.as_ref();
+                if config.token.is_none() {
+                    break;
+                }
+                let token = token.unwrap().value.clone();
+
                 let socket_url = format!(
                     "{}/websocket",
                     config
@@ -65,9 +71,10 @@ pub fn start(app: tauri::AppHandle) {
                 );
                 let socket_id = SOCKET_ID.lock().unwrap().clone();
                 let uri: Uri = socket_url.parse().unwrap();
+
                 let request = ClientRequestBuilder::new(uri)
                     .with_header("socket_id", &socket_id)
-                    .with_header("authorization", &config.token.unwrap());
+                    .with_header("authorization", &token);
                 match connect_async(request).await {
                     Ok((mut socket, _response)) => {
                         println!("Connected to server");
@@ -143,12 +150,15 @@ async fn handle_msg(
     }
     let mut futures = vec![];
     let changes = fstree::detect_renames(changes);
-    println!("changes: {:?}", changes);
+    // println!("changes: {:?}", changes);
     for change in changes {
+        println!(
+            "nodeType:{:?} -> {:?}: {}",
+            change.node_type, change.change_type, change.path,
+        );
         match change.change_type {
             fstree::ChangeType::Added => match change.node_type {
                 fstree::NodeType::File => {
-                    println!("add {}", change.path);
                     futures.push(api::download(
                         app.app_handle().clone(),
                         root_path,
@@ -168,7 +178,6 @@ async fn handle_msg(
                 fstree::NodeType::File => {
                     let _ = std::fs::remove_file(Path::new(root_path).join(&change.path));
 
-                    println!("del {}", change.path);
                     local_tree
                         .lock()
                         .unwrap()
@@ -176,7 +185,10 @@ async fn handle_msg(
                         .unwrap();
                 }
                 fstree::NodeType::Folder => {
-                    std::fs::remove_dir_all(Path::new(root_path).join(&change.path)).unwrap();
+                    let _ = std::fs::remove_dir_all(Path::new(root_path).join(&change.path))
+                        .map_err(|_| {
+                            println!("failed to delete {:#?}", change.path);
+                        });
                     local_tree
                         .lock()
                         .unwrap()
@@ -237,6 +249,7 @@ fn handle_event(
             return;
         }
     }
+
     match event {
         val if val.kind == EventKind::Create(CreateKind::Any) => {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -264,7 +277,7 @@ fn handle_event(
             || (val.kind == EventKind::Modify(ModifyKind::Any)) =>
         {
             let path = std::path::Path::new(val.paths[0].to_str().unwrap());
-            if path.is_dir() {
+            if path.is_dir() && val.kind != EventKind::Modify(ModifyKind::Name(RenameMode::To)) {
                 return;
             }
             let node = fstree::build_node(&root_path, path);
@@ -282,10 +295,9 @@ fn handle_event(
         let tree2: fstree::Node = serde_json::from_str(&saved_tree).unwrap();
 
         fstree::diff_trees("", Some(&tree2), Some(&tree.lock().unwrap()), &mut changes);
-        fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
 
         let changes = fstree::detect_renames(changes);
-        println!("changes: {:?}", changes);
+        // println!("changes: {:?}", changes);
         for change in changes {
             println!(
                 "nodeType:{:?} -> {:?}: {}",
@@ -300,8 +312,11 @@ fn handle_event(
                         change.parent_id,
                         &root_path,
                         &change.path,
+                        tree.clone(),
                     ),
-                    fstree::NodeType::Folder => api::create_folder(&change.path),
+                    fstree::NodeType::Folder => {
+                        api::create_folder(&change.path, change.id, change.parent_id)
+                    }
                 },
                 fstree::ChangeType::Deleted => api::delete(change.id, &change.path),
                 fstree::ChangeType::Renamed { from } => {
@@ -320,8 +335,10 @@ fn handle_event(
                     change.parent_id,
                     &root_path,
                     &change.path,
+                    tree.clone(),
                 ),
             }
         }
+        fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
     })
 }

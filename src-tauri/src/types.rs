@@ -1,13 +1,22 @@
+use std::time::SystemTime;
+
 use crate::synchronizer::fstree;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Token {
+    pub value: String,
+    pub created_at: SystemTime,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub username: Option<String>,
     pub password: Option<String>,
     pub server_url: String,
     pub folder_path: String,
-    pub token: Option<String>,
-    pub refresh_token: Option<String>,
+    pub token: Option<Token>,
+    pub refresh_token: Option<Token>,
     pub is_configured: bool,
 }
 impl Default for Config {

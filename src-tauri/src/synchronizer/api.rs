@@ -1,5 +1,6 @@
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
+use reqwest::blocking::multipart::Part;
 use reqwest::blocking::Client;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -8,69 +9,122 @@ use tauri::async_runtime::block_on;
 use tauri::Manager;
 use tokio_util::io::ReaderStream;
 
-use crate::force_sync;
 use crate::synchronizer::{fstree, IGNORE_LIST, SOCKET_ID, TRANSFERS};
 use crate::types::{Transfer, TransferState, TransferType};
 use crate::CONFIG;
-pub fn rename(id: Option<String>, parent_id: Option<String>, path: &str, destination: &str) {
+pub fn rename(
+    id: Arc<Mutex<Option<String>>>,
+    parent_id: Arc<Mutex<Option<String>>>,
+    path: &str,
+    destination: &str,
+) {
+    let id = id.lock().unwrap().clone();
+    if id.is_none() {
+        return;
+    }
+    let id = id.unwrap();
+    let parent_id = parent_id.lock().unwrap().clone();
     let client = Client::new();
     let config = CONFIG.lock().unwrap();
     let server = config.server_url.to_owned();
-    let _ = client
-        .post(format!("{server}/rename"))
+    let token = config.token.as_ref().unwrap().value.clone();
+    let name = std::path::Path::new(destination)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let res = client
+        .put(format!("{server}/files/{id}"))
         .json(&json!({
             "path": path,
+            "name": name,
             "destination": destination,
+            "parentId": parent_id.unwrap_or_default()
         }))
         .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
-        .header("Token", config.token.as_ref().unwrap())
-        .header("ID", id.unwrap_or_default())
-        .header("Parent-ID", parent_id.unwrap_or_default())
+        .header("authorization", token)
         .send()
         .map_err(|_| (println!("Failed to rename {path}")));
 }
 
-pub fn create_folder(path: &str) {
+pub fn create_folder(
+    path: &str,
+    id: Arc<Mutex<Option<String>>>,
+    parent_id: Arc<Mutex<Option<String>>>,
+) {
     let client = Client::new();
     let config = CONFIG.lock().unwrap();
     let server = config.server_url.to_owned();
-    let _ = client
+    let token = config.token.as_ref().unwrap().value.clone();
+    let parent_id = parent_id.lock().unwrap().clone().unwrap();
+    let name = std::path::Path::new(path)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let json_string =
+        json!({"name": name, "parentFolderId": parent_id, "isFolder": true,"contentType":"folder", "size": 0}).to_string();
+    let part = Part::text(json_string)
+        .mime_str("application/json")
+        .unwrap()
+        .file_name("request.json");
+    let form = reqwest::blocking::multipart::Form::new().part("request", part);
+
+    let res = client
         .post(format!("{server}/files"))
-        .json(&json!({
-            "destination": path,
-        }))
         .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
-        .header("Token", config.token.as_ref().unwrap())
+        .header("authorization", token)
+        .multipart(form)
         .send()
         .map_err(|_| (println!("Failed to create folder {path}")));
+
+    if res.is_err() || !res.as_ref().unwrap().status().is_success() {
+        return;
+    }
+    let resp: serde_json::Value = res.unwrap().json().unwrap();
+    id.lock()
+        .unwrap()
+        .replace(resp["id"].as_str().unwrap().to_string());
 }
 
-pub fn delete(id: Option<String>, path: &str) {
+pub fn delete(id: Arc<Mutex<Option<String>>>, path: &str) {
+    let id = id.lock().unwrap().clone();
+    if id.is_none() {
+        return;
+    }
+    let id = id.unwrap();
     let client = Client::new();
     let config = CONFIG.lock().unwrap();
     let server = config.server_url.to_owned();
-    let _ = client
-        .post(format!("{server}/delete"))
+    let token = config.token.as_ref().unwrap().value.clone();
+    let res = client
+        .delete(format!("{server}/files/{id}"))
         .json(&json!({
             "path": path
         }))
         .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
-        .header("Token", config.token.as_ref().unwrap())
-        .header("ID", id.unwrap_or_default())
+        .header("authorization", token)
         .send()
         .map_err(|_| (println!("Failed to delete {path}")));
 }
 
 pub fn upload(
     app: tauri::AppHandle,
-    id: Option<String>,
-    parent_id: Option<String>,
+    id: Arc<Mutex<Option<String>>>,
+    parent_id: Arc<Mutex<Option<String>>>,
     root_path: &PathBuf,
     destination: &str,
+    tree: Arc<Mutex<fstree::Node>>,
 ) {
+    let file_id = id.lock().unwrap().clone();
+    let parent_id = parent_id.lock().unwrap().clone();
+
     let config = CONFIG.lock().unwrap().clone();
     let socket_id = SOCKET_ID.lock().unwrap().clone();
     let server = config.server_url.to_owned();
+    let token = config.token.as_ref().unwrap().value.clone();
     let absolute_path = root_path.join(destination);
     println!("Uploading {:?}", absolute_path);
 
@@ -116,19 +170,23 @@ pub fn upload(
                 },
             );
             let file_name_encoded: String = urlencoding::encode(&file_name).to_string();
-            let _ = client
+            println!("{:?}", file_id);
+            let resp = client
                 .post(format!("{server}/upload"))
                 .header("Content-Type", "application/octet-stream")
                 .header("Socket-ID", socket_id)
                 .header("fileName", file_name_encoded)
                 .header("Content-Length", file_size.to_string())
-                .header("authorization", config.token.as_ref().unwrap())
-                .header("ID", id.unwrap_or_default())
+                .header("authorization", token)
+                .header("elementId", file_id.unwrap_or_default())
                 .header("parentId", parent_id.unwrap_or_default())
-                .body(body)
-                .send()
-                .await;
+                .body(body);
+            let resp = resp.send().await;
             // Mark as completed
+            let resp: serde_json::Value = resp.unwrap().json().await.unwrap();
+            id.lock()
+                .unwrap()
+                .replace(resp["id"].as_str().unwrap().to_string());
             let transfer = Transfer {
                 progress: 100,
                 state: TransferState::Completed,
@@ -142,7 +200,7 @@ pub fn upload(
                 .lock()
                 .unwrap()
                 .insert(destination.clone().into(), transfer);
-            // force_sync(app).unwrap();
+            fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
         });
     });
 }
@@ -151,16 +209,18 @@ pub async fn download(
     app: tauri::AppHandle,
     root_path: &PathBuf,
     path: String,
-    id: Option<String>,
+    id: Arc<Mutex<Option<String>>>,
     local_tree: Arc<Mutex<fstree::Node>>,
 ) {
     let socket_id = SOCKET_ID.lock().unwrap().clone();
     let config = CONFIG.lock().unwrap().clone();
     let server = config.server_url.to_owned();
+    let token = config.token.as_ref().unwrap().value.clone();
     let full_path = root_path.join(&path);
     let destination = full_path.clone();
     let window = app.get_window("main");
     let client = reqwest::Client::new();
+    let id = id.lock().unwrap().clone();
     if id.is_none() {
         return;
     }
@@ -168,10 +228,9 @@ pub async fn download(
     let response = client
         .get(format!("{server}/files/{id}/download"))
         .header("Socket-ID", socket_id)
-        .header("authorization", config.token.as_ref().unwrap())
+        .header("authorization", token)
         .send()
         .await;
-    println!("response: {:#?}", response);
     let resp = match response {
         Ok(r) if r.status().is_success() => r,
         _ => return, // early return on error or non-2xx
@@ -221,11 +280,7 @@ pub async fn download(
         downloaded += chunk.len() as u64;
 
         let progress = (downloaded as f64 / total_size as f64) * 100.0;
-        // println!(
-        //     "file:{}, progress: {}",
-        //     destination.to_string_lossy().to_string(),
-        //     progress
-        // );
+
         let transfer = Transfer {
             progress: progress as u32,
             state: TransferState::Active,

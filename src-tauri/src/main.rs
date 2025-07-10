@@ -1,11 +1,14 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod synchronizer;
+mod token;
 mod types;
+mod windows;
 use std::{
     collections::HashMap,
     path::Path,
     sync::{LazyLock, Mutex},
+    time::{Duration, SystemTime},
 };
 
 use reqwest::Client;
@@ -14,11 +17,12 @@ use tauri::{
     AppHandle, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu,
     SystemTrayMenuItem,
 };
-use tauri_plugin_positioner::{Position, WindowExt};
+
+use tokio::time::sleep;
 
 use crate::{
     synchronizer::TRANSFERS,
-    types::{Config, TransferState},
+    types::{Config, Token, TransferState},
 };
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
 
@@ -42,21 +46,25 @@ async fn main() {
             set_config(app.handle());
             let config = CONFIG.lock().unwrap().clone();
             if !config.is_configured {
-                open_initial_configuration_window(app.handle());
-            } else if config.username.is_none() || config.password.is_none() {
-                open_login_window(app.handle());
+                windows::open_initial_configuration_window(app.handle());
+            } else if config.username.is_none()
+                || config.password.is_none()
+                || config.token.is_none()
+                || config.refresh_token.is_none()
+            {
+                windows::open_login_window(app.handle());
             } else {
-                open_main_window(app.handle());
+                windows::open_main_window(app.handle());
                 synchronizer::start(app.handle());
+                tokio::spawn(token::watch_tokens(app.handle()));
             }
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            open_main_window,
-            open_config_window,
-            open_login_window,
-            open_initial_configuration_window,
+            windows::open_main_window,
+            windows::open_config_window,
+            windows::open_login_window,
+            windows::open_initial_configuration_window,
             login,
             get_completed_transfers,
             update_config,
@@ -68,17 +76,17 @@ async fn main() {
         .system_tray(system_tray)
         .on_system_tray_event(|app_handle, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
-                open_main_window(app_handle.clone());
+                windows::open_main_window(app_handle.clone());
             }
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 "quit" => {
                     std::process::exit(0);
                 }
                 "show" => {
-                    open_main_window(app_handle.clone());
+                    windows::open_main_window(app_handle.clone());
                 }
                 "settings" => {
-                    open_config_window(app_handle.clone());
+                    windows::open_config_window(app_handle.clone());
                 }
                 _ => (),
             },
@@ -95,104 +103,6 @@ async fn main() {
 }
 
 #[tauri::command]
-fn open_main_window(app: AppHandle) {
-    let config = CONFIG.lock().unwrap().clone();
-    if !config.is_configured {
-        open_initial_configuration_window(app);
-        return;
-    } else if config.username.is_none() || config.password.is_none() {
-        open_login_window(app);
-        return;
-    }
-
-    let main_window = app.get_window("main");
-    if main_window.is_some() {
-        main_window.unwrap().set_focus().unwrap();
-        return;
-    }
-    let position = Position::TopRight;
-    let window = tauri::WindowBuilder::new(&app, "main", tauri::WindowUrl::App("/".into()))
-        .title("File Transfer")
-        .inner_size(400.0, 500.0)
-        .theme(Some(tauri::Theme::Light))
-        .resizable(false)
-        .maximizable(false)
-        .minimizable(false)
-        .decorations(false)
-        .always_on_top(true)
-        .focused(false)
-        .visible(false)
-        .build()
-        .unwrap();
-    window.move_window(position).unwrap();
-    window.show().unwrap();
-    window.set_focus().unwrap();
-    let _window = window.clone();
-    window.on_window_event(move |event| match event {
-        tauri::WindowEvent::Focused(focused) => {
-            if !focused {
-                _window.close().unwrap();
-            }
-        }
-        _ => {}
-    });
-}
-
-#[tauri::command]
-fn open_config_window(app: AppHandle) {
-    let config_window = app.get_window("config");
-    if config_window.is_some() {
-        config_window.unwrap().set_focus().unwrap();
-        return;
-    }
-    tauri::async_runtime::spawn(async move {
-        tauri::WindowBuilder::new(&app, "config", tauri::WindowUrl::App("/config".into()))
-            .title("Configuración")
-            .inner_size(600.0, 500.0)
-            .min_inner_size(600.0, 500.0)
-            .theme(Some(tauri::Theme::Light))
-            .maximizable(false)
-            .minimizable(false)
-            .build()
-            .unwrap();
-    });
-}
-
-#[tauri::command]
-fn open_login_window(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        tauri::WindowBuilder::new(&app, "Login", tauri::WindowUrl::App("/login".into()))
-            .title("Login")
-            .inner_size(600.0, 500.0)
-            .min_inner_size(600.0, 500.0)
-            .theme(Some(tauri::Theme::Light))
-            .maximizable(false)
-            .minimizable(false)
-            .build()
-            .unwrap();
-    });
-}
-
-#[tauri::command]
-fn open_initial_configuration_window(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        tauri::WindowBuilder::new(
-            &app,
-            "initialConfiguration",
-            tauri::WindowUrl::App("/initialConfiguration".into()),
-        )
-        .title("Initial Configuration")
-        .inner_size(600.0, 500.0)
-        .min_inner_size(600.0, 500.0)
-        .theme(Some(tauri::Theme::Light))
-        .maximizable(false)
-        .minimizable(false)
-        .build()
-        .unwrap();
-    });
-}
-
-#[tauri::command]
 fn get_completed_transfers() -> Vec<types::Transfer> {
     TRANSFERS
         .lock()
@@ -204,7 +114,11 @@ fn get_completed_transfers() -> Vec<types::Transfer> {
 }
 
 #[tauri::command]
-async fn update_config(app: AppHandle, config: Config) -> Result<(), HashMap<String, String>> {
+async fn update_config(
+    app: AppHandle,
+    config: Config,
+    restart: bool,
+) -> Result<(), HashMap<String, String>> {
     let app_dir = app.path_resolver().app_data_dir().unwrap();
     let config_path = app_dir.join("config.json");
     let mut error_map = HashMap::new();
@@ -227,10 +141,11 @@ async fn update_config(app: AppHandle, config: Config) -> Result<(), HashMap<Str
     if !error_map.is_empty() {
         return Err(error_map);
     }
-
     *CONFIG.lock().unwrap() = config.clone();
-    synchronizer::stop();
-    synchronizer::start(app);
+    if restart {
+        synchronizer::stop();
+        synchronizer::start(app);
+    }
     std::fs::write(config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
     Ok(())
 }
@@ -267,7 +182,7 @@ async fn save_initial_config(
     std::fs::write(config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
     *CONFIG.lock().unwrap() = config;
     window.close().unwrap();
-    open_login_window(app.clone());
+    windows::open_login_window(app.clone());
     Ok(())
 }
 
@@ -314,6 +229,15 @@ async fn login(app: AppHandle, username: String, password: String) -> Result<(),
         .to_str()
         .unwrap();
 
+    let token = Token {
+        value: token.to_string(),
+        created_at: SystemTime::now(),
+    };
+    let refresh_token = Token {
+        value: refresh_token.to_string(),
+        created_at: SystemTime::now(),
+    };
+
     let config = {
         let mut config = CONFIG.lock().unwrap();
         config.username.replace(username);
@@ -322,9 +246,11 @@ async fn login(app: AppHandle, username: String, password: String) -> Result<(),
         config.refresh_token.replace(refresh_token.to_owned());
         config.clone()
     };
-    let _ = update_config(app.clone(), config).await;
+    let _ = update_config(app.clone(), config, true).await;
     login_window.close().unwrap();
-    open_main_window(app);
+
+    tokio::spawn(token::watch_tokens(app.clone()));
+    windows::open_main_window(app);
     Ok(())
 }
 
@@ -342,4 +268,20 @@ fn force_sync(app: AppHandle) -> Result<(), String> {
     synchronizer::stop();
     synchronizer::start(app);
     Ok(())
+}
+
+async fn log_out(app: AppHandle) {
+    let config = {
+        let mut config = CONFIG.lock().unwrap();
+        config.token.take();
+        config.refresh_token.take();
+        config.username.take();
+        config.password.take();
+        config.clone()
+    };
+    let _ = update_config(app.clone(), config, false).await.unwrap();
+    synchronizer::stop();
+    token::stop();
+    windows::close_all(app.clone());
+    windows::open_login_window(app.clone());
 }
