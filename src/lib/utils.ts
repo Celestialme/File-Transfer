@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api';
 import { config } from './store.svelte';
 
 export async function update_config() {
-	await invoke('update_config', { config });
+	await invoke('update_config', { config, restart: true });
 }
 export async function get_config() {
 	return await invoke('get_config');

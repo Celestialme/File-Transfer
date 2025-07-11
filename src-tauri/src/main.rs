@@ -123,7 +123,7 @@ async fn update_config(
     if config.server_url != CONFIG.lock().unwrap().server_url {
         let client = Client::new();
         let server = config.server_url.to_owned();
-        let resp = client.get(format!("{server}/health/check")).send().await;
+        let resp = client.get(format!("{server}/actuator/health")).send().await;
         if resp.is_err() || !resp.unwrap().status().is_success() {
             error_map.insert("server".to_string(), "server not reachable".to_string());
         }
