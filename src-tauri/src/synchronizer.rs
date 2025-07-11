@@ -8,11 +8,7 @@ use notify::{
     event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind, RenameMode},
     Event, EventKind, RecommendedWatcher, RecursiveMode, Result, Watcher,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    sync::LazyLock,
-    vec,
-};
+use std::{collections::HashMap, sync::LazyLock, vec};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
