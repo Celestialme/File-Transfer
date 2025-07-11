@@ -232,7 +232,7 @@ async fn handle_msg(
     println!("changes: {:?}", changes);
     if changes.is_empty() {
         *local_tree.lock().unwrap() = remote_tree;
-        println!("tree 1");
+
         fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
     }
 }
@@ -270,11 +270,13 @@ fn handle_event(
         | EventKind::Create(CreateKind::Any) => {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let path = std::path::Path::new(event.paths[0].to_str().unwrap());
-            if path.is_dir()
-                && event.kind != EventKind::Create(CreateKind::Folder)
-                && event.kind != EventKind::Modify(ModifyKind::Name(RenameMode::To))
-            {
-                return;
+            if path.is_dir() {
+                match event.kind {
+                    EventKind::Create(CreateKind::Folder)
+                    | EventKind::Create(CreateKind::Any)
+                    | EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {}
+                    _ => return,
+                }
             }
             let node = fstree::build_node(&root_path, path);
 
@@ -335,8 +337,8 @@ fn handle_event(
                 ),
             }
         }
-        println!("tree 2");
-        fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
-        if !changes.is_empty() {}
+        if !changes.is_empty() {
+            fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
+        }
     })
 }
