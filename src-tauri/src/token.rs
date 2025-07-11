@@ -5,7 +5,7 @@ use std::{
 use tauri::AppHandle;
 use tokio::sync::watch;
 
-use crate::{log_out, types::Token, update_config, CONFIG};
+use crate::{logout, types::Token, update_config, CONFIG};
 const REFRESH_TOKEN_EXPIRES: u64 = 24 * 60 * 60; // 1day
 const TOKEN_EXPIRES: u64 = 15 * 60; // half hour
 static TOKEN_WATCH_STOP: Mutex<Option<watch::Sender<bool>>> = Mutex::new(None);
@@ -45,7 +45,7 @@ pub async fn watch_tokens(app: AppHandle) {
                 break;
             }
         }
-        log_out(_app.clone()).await;
+        logout(_app.clone()).await;
     };
 
     let token_task = async move {

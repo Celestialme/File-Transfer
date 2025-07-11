@@ -11,6 +11,9 @@ export async function get_config() {
 export async function login({ username, password }: { username: string; password: string }) {
 	return await invoke('login', { username, password });
 }
+export async function logout() {
+	return await invoke('logout');
+}
 export async function save_initial_config({
 	serverUrl,
 	folderPath

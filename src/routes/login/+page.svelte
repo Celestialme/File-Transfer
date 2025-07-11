@@ -1,14 +1,14 @@
 <script lang="ts">
+	import { config } from '$lib/store.svelte';
 	import { login } from '$lib/utils';
 
 	let isLoading = $state(false);
-	let credintials = $state({ username: '', password: '' });
 	let error = $state('');
 	async function submit(e: Event) {
 		e.preventDefault();
 		error = '';
 		isLoading = true;
-		await login({ ...credintials }).catch((e) => (error = e));
+		await login({ username: config.username, password: config.password }).catch((e) => (error = e));
 		isLoading = false;
 	}
 </script>
@@ -22,7 +22,7 @@
 				<p class="block cursor-default text-sm font-medium text-gray-700">Usuario</p>
 				<input
 					type="text"
-					bind:value={credintials.username}
+					bind:value={config.username}
 					id="username"
 					class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
 					required
@@ -33,7 +33,7 @@
 				<p class="block cursor-default text-sm font-medium text-gray-700">Contraseña</p>
 				<input
 					type="password"
-					bind:value={credintials.password}
+					bind:value={config.password}
 					id="password"
 					class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
 					required

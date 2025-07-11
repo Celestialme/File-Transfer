@@ -64,6 +64,7 @@ async fn main() {
             windows::open_login_window,
             windows::open_initial_configuration_window,
             login,
+            logout,
             get_completed_transfers,
             update_config,
             save_initial_config,
@@ -267,19 +268,17 @@ fn force_sync(app: AppHandle) -> Result<(), String> {
     synchronizer::start(app);
     Ok(())
 }
-
-async fn log_out(app: AppHandle) {
+#[tauri::command]
+async fn logout(app: AppHandle) {
     let config = {
         let mut config = CONFIG.lock().unwrap();
         config.token.take();
         config.refresh_token.take();
-        config.username.take();
-        config.password.take();
         config.clone()
     };
     let _ = update_config(app.clone(), config, false).await.unwrap();
     synchronizer::stop();
     token::stop();
-    windows::close_all(app.clone());
+    windows::close_all(app.clone(), vec!["Login"]);
     windows::open_login_window(app.clone());
 }

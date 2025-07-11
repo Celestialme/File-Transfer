@@ -107,9 +107,12 @@ pub fn open_initial_configuration_window(app: AppHandle) {
     });
 }
 
-pub fn close_all(app: AppHandle) {
+pub fn close_all(app: AppHandle, ignore: Vec<&str>) {
     let windows = app.windows().into_iter().collect::<Vec<_>>();
     for (_, window) in windows {
+        if ignore.contains(&window.label()) {
+            continue;
+        }
         window.close().unwrap();
     }
 }
