@@ -336,6 +336,9 @@ impl Node {
                 if parts.len() == 1 {
                     // Insert the new node
                     new_node.parent_id = self.id.clone();
+                    new_node.id = children
+                        .get(key)
+                        .map_or_else(|| new_node.id, |n| n.id.clone());
                     children.insert(key.clone(), new_node);
                 } else {
                     // Recurse into subfolder

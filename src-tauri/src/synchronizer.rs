@@ -232,6 +232,7 @@ async fn handle_msg(
     println!("changes: {:?}", changes);
     if changes.is_empty() {
         *local_tree.lock().unwrap() = remote_tree;
+        println!("tree 1");
         fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
     }
 }
@@ -276,6 +277,7 @@ fn handle_event(
                 return;
             }
             let node = fstree::build_node(&root_path, path);
+
             if node.is_ok() {
                 tree.lock().unwrap().add_node(node.unwrap()).unwrap();
             }
@@ -333,8 +335,8 @@ fn handle_event(
                 ),
             }
         }
-        if !changes.is_empty() {
-            fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
-        }
+        println!("tree 2");
+        fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
+        if !changes.is_empty() {}
     })
 }

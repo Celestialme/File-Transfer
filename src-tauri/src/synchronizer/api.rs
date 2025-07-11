@@ -18,7 +18,6 @@ pub fn rename(
     path: &str,
     destination: &str,
 ) {
-    println!("calling rename");
     let id = id.lock().unwrap().clone();
     if id.is_none() {
         return;
@@ -295,6 +294,10 @@ pub async fn download(
         if let Some(ref window) = window {
             window.emit("transfer", &transfer).unwrap();
         }
+        TRANSFERS
+            .lock()
+            .unwrap()
+            .insert(destination.clone(), transfer);
     }
 
     // Add to local tree
