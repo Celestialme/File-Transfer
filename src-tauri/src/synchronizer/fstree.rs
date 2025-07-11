@@ -240,8 +240,9 @@ pub fn detect_renames(mut changes: Vec<Change>) -> Vec<Change> {
                 del.node_type == add.node_type && del.hash == Some(add_hash.clone())
             }) {
                 let del = deleted.remove(pos);
+                *add.id.lock().unwrap() = del.id.lock().unwrap().clone();
                 final_changes.push(Change {
-                    id: del.id.clone(),
+                    id: add.id.clone(),
                     parent_id: add.parent_id.clone(),
                     node_type: add.node_type.clone(),
                     path: add.path,

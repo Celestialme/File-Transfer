@@ -9,7 +9,7 @@ use tauri::async_runtime::block_on;
 use tauri::Manager;
 use tokio_util::io::ReaderStream;
 
-use crate::synchronizer::{fstree, IGNORE_LIST, SOCKET_ID, TRANSFERS};
+use crate::synchronizer::{fstree, SOCKET_ID, TRANSFERS};
 use crate::types::{Transfer, TransferState, TransferType};
 use crate::CONFIG;
 pub fn rename(
@@ -18,6 +18,7 @@ pub fn rename(
     path: &str,
     destination: &str,
 ) {
+    println!("calling rename");
     let id = id.lock().unwrap().clone();
     if id.is_none() {
         return;
@@ -253,11 +254,6 @@ pub async fn download(
         }
     };
 
-    IGNORE_LIST
-        .lock()
-        .unwrap()
-        .insert(destination.clone().into());
-
     TRANSFERS.lock().unwrap().insert(
         destination.clone(),
         Transfer {
@@ -299,10 +295,6 @@ pub async fn download(
         if let Some(ref window) = window {
             window.emit("transfer", &transfer).unwrap();
         }
-        TRANSFERS
-            .lock()
-            .unwrap()
-            .insert(destination.clone(), transfer);
     }
 
     // Add to local tree
@@ -312,7 +304,6 @@ pub async fn download(
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-    IGNORE_LIST.lock().unwrap().remove(destination.as_path());
 
     let transfer = Transfer {
         progress: 100,

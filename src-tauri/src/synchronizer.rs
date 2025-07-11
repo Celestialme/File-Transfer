@@ -5,7 +5,7 @@ use crate::{
 use futures_util::future::join_all;
 use futures_util::StreamExt;
 use notify::{
-    event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
+    event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind, RenameMode},
     Event, EventKind, RecommendedWatcher, RecursiveMode, Result, Watcher,
 };
 use std::{
@@ -23,8 +23,7 @@ use tungstenite::{http::Uri, ClientRequestBuilder};
 mod api;
 mod debouncer;
 pub(crate) mod fstree;
-static IGNORE_LIST: LazyLock<Mutex<HashSet<PathBuf>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+
 pub static TRANSFERS: LazyLock<Mutex<HashMap<PathBuf, Transfer>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static SOCKET_ID: Mutex<String> = Mutex::new(String::new());
@@ -153,7 +152,7 @@ async fn handle_msg(
     // println!("changes: {:?}", changes);
     for change in changes {
         println!(
-            "nodeType:{:?} -> {:?}: {}",
+            "remote nodeType:{:?} -> {:?}: {}",
             change.node_type, change.change_type, change.path,
         );
         match change.change_type {
@@ -202,6 +201,7 @@ async fn handle_msg(
                     Path::new(root_path).join(&change.path),
                 )
                 .unwrap();
+
                 local_tree
                     .lock()
                     .unwrap()
@@ -229,8 +229,9 @@ async fn handle_msg(
         &mut changes,
     );
     remote_tree.path = Some(root_path.to_str().unwrap().to_string());
-    *local_tree.lock().unwrap() = remote_tree;
+    println!("changes: {:?}", changes);
     if changes.is_empty() {
+        *local_tree.lock().unwrap() = remote_tree;
         fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
     }
 }
@@ -244,40 +245,34 @@ fn handle_event(
     root_path: PathBuf,
     debouncer: &debouncer::Debouncer,
 ) {
-    for path in event.paths.iter() {
-        if IGNORE_LIST.lock().unwrap().contains(path.as_path()) {
-            return;
-        }
-    }
-
-    match event {
-        val if val.kind == EventKind::Create(CreateKind::Any) => {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let node = fstree::build_node(
-                &root_path,
-                std::path::Path::new(&val.paths[0].to_str().unwrap()),
-            )
-            .unwrap();
-            tree.lock().unwrap().add_node(node).unwrap();
-        }
-        val if val.kind == EventKind::Remove(RemoveKind::Any) => {
+    match event.kind {
+        EventKind::Remove(RemoveKind::File)
+        | EventKind::Remove(RemoveKind::Folder)
+        | EventKind::Remove(RemoveKind::Any) => {
             let _ = tree
                 .lock()
                 .unwrap()
-                .delete_node(&val.paths[0].to_str().unwrap())
-                .map_err(|_| println!("failed to delete {:#?}", val.paths[0].to_str().unwrap()));
+                .delete_node(&event.paths[0].to_str().unwrap())
+                .map_err(|_| println!("failed to delete {:#?}", event.paths[0].to_str().unwrap()));
         }
-        val if val.kind == EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
             tree.lock()
                 .unwrap()
-                .delete_node(&val.paths[0].to_str().unwrap())
+                .delete_node(&event.paths[0].to_str().unwrap())
                 .unwrap();
         }
-        val if val.kind == EventKind::Modify(ModifyKind::Name(RenameMode::To))
-            || (val.kind == EventKind::Modify(ModifyKind::Any)) =>
-        {
-            let path = std::path::Path::new(val.paths[0].to_str().unwrap());
-            if path.is_dir() && val.kind != EventKind::Modify(ModifyKind::Name(RenameMode::To)) {
+        EventKind::Modify(ModifyKind::Name(RenameMode::To))
+        | EventKind::Modify(ModifyKind::Any)
+        | EventKind::Access(AccessKind::Close(AccessMode::Write))
+        | EventKind::Create(CreateKind::File)
+        | EventKind::Create(CreateKind::Folder)
+        | EventKind::Create(CreateKind::Any) => {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let path = std::path::Path::new(event.paths[0].to_str().unwrap());
+            if path.is_dir()
+                && event.kind != EventKind::Create(CreateKind::Folder)
+                && event.kind != EventKind::Modify(ModifyKind::Name(RenameMode::To))
+            {
                 return;
             }
             let node = fstree::build_node(&root_path, path);
@@ -298,9 +293,9 @@ fn handle_event(
 
         let changes = fstree::detect_renames(changes);
         // println!("changes: {:?}", changes);
-        for change in changes {
+        for change in changes.clone() {
             println!(
-                "nodeType:{:?} -> {:?}: {}",
+                "local nodeType:{:?} -> {:?}: {}",
                 change.node_type, change.change_type, change.path,
             );
 
@@ -320,12 +315,12 @@ fn handle_event(
                 },
                 fstree::ChangeType::Deleted => api::delete(change.id, &change.path),
                 fstree::ChangeType::Renamed { from } => {
-                    let mut node =
+                    let node =
                         fstree::build_node(&Path::new(&root_path), &root_path.join(&change.path))
                             .unwrap();
 
                     api::rename(change.id.clone(), change.parent_id, &from, &change.path);
-                    node.id = change.id;
+                    *node.id.lock().unwrap() = change.id.lock().unwrap().clone();
                     tree.lock().unwrap().add_node(node).unwrap();
                 }
                 fstree::ChangeType::Modified => api::upload(
@@ -338,6 +333,8 @@ fn handle_event(
                 ),
             }
         }
-        fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
+        if !changes.is_empty() {
+            fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
+        }
     })
 }
