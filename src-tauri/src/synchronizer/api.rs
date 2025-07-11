@@ -34,7 +34,7 @@ pub fn rename(
         .to_str()
         .unwrap()
         .to_string();
-    let res = client
+    let _ = client
         .put(format!("{server}/files/{id}"))
         .json(&json!({
             "path": path,
@@ -99,7 +99,7 @@ pub fn delete(id: Arc<Mutex<Option<String>>>, path: &str) {
     let config = CONFIG.lock().unwrap();
     let server = config.server_url.to_owned();
     let token = config.token.as_ref().unwrap().value.clone();
-    let res = client
+    let _ = client
         .delete(format!("{server}/files/{id}"))
         .json(&json!({
             "path": path
@@ -133,7 +133,15 @@ pub fn upload(
     std::thread::spawn(move || {
         block_on(async move {
             let client = reqwest::Client::new();
-            let file = tokio::fs::File::open(&absolute_path).await.unwrap();
+            let file = tokio::fs::File::open(&absolute_path).await;
+            if file.is_err() {
+                println!(
+                    "Failed to open file: can't upload {}",
+                    absolute_path.display()
+                );
+                return;
+            }
+            let file = file.unwrap();
             let file_size = file.metadata().await.unwrap().len();
             let file_name = absolute_path.file_name().unwrap().to_str().unwrap();
             let _destination = destination.clone();
@@ -184,9 +192,6 @@ pub fn upload(
             let resp = resp.send().await;
             // Mark as completed
             let resp: serde_json::Value = resp.unwrap().json().await.unwrap();
-            id.lock()
-                .unwrap()
-                .replace(resp["id"].as_str().unwrap().to_string());
             let transfer = Transfer {
                 progress: 100,
                 state: TransferState::Completed,
@@ -200,6 +205,10 @@ pub fn upload(
                 .lock()
                 .unwrap()
                 .insert(destination.clone().into(), transfer);
+            id.lock()
+                .unwrap()
+                .replace(resp["id"].as_str().unwrap().to_string());
+            println!("id is {}", id.lock().unwrap().clone().unwrap());
             fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
         });
     });

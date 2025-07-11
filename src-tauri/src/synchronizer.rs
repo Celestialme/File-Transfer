@@ -327,7 +327,6 @@ fn handle_event(
                     api::rename(change.id.clone(), change.parent_id, &from, &change.path);
                     node.id = change.id;
                     tree.lock().unwrap().add_node(node).unwrap();
-                    fstree::save_tree(&tree.lock().unwrap(), "tree.json").unwrap();
                 }
                 fstree::ChangeType::Modified => api::upload(
                     app.clone(),

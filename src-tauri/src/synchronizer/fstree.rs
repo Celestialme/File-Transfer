@@ -146,8 +146,9 @@ pub fn diff_trees(
                 && node_1.node_type == NodeType::File
                 && node_2.node_type == NodeType::File
             {
+                *node_2.id.lock().unwrap() = node_1.id.lock().unwrap().clone();
                 changes.push(Change {
-                    id: node_1.id.clone(),
+                    id: node_2.id.clone(),
                     parent_id: node_1.parent_id.clone(),
                     node_type: node_2.node_type.clone(),
                     path: path.to_string(),

@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{LazyLock, Mutex},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 use reqwest::Client;
@@ -17,8 +17,6 @@ use tauri::{
     AppHandle, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu,
     SystemTrayMenuItem,
 };
-
-use tokio::time::sleep;
 
 use crate::{
     synchronizer::TRANSFERS,
