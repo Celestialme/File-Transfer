@@ -1,20 +1,11 @@
 <script>
 	import { config } from '$lib/store.svelte';
-	import { logout, update_config } from '$lib/utils';
-
-	let isEditingPassword = $state(false);
-
-	function handlePasswordEdit() {
-		if (isEditingPassword) {
-			update_config();
-		}
-		isEditingPassword = !isEditingPassword;
-	}
+	import { logout } from '$lib/utils';
 </script>
 
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
-		<span class="text-sm font-medium text-gray-700">Nombre de usuario</span>
+		<span class="text-sm font-medium text-gray-700">User Name</span>
 		<span
 			class="text-md w-[100px] rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-center text-gray-600"
 		>

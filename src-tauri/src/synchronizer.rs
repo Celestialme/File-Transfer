@@ -73,7 +73,7 @@ pub fn start(app: tauri::AppHandle) {
                 match connect_async(request).await {
                     Ok((mut socket, _response)) => {
                         println!("Connected to server");
-
+                        app.emit_all("is_connected", true).unwrap();
                         while let Some(msg) = socket.next().await {
                             match msg {
                                 Ok(tungstenite::Message::Text(text)) => {
@@ -94,6 +94,7 @@ pub fn start(app: tauri::AppHandle) {
                         println!("Disconnected from server");
                     }
                     Err(e) => {
+                        app.emit_all("is_connected", false).unwrap();
                         println!("Failed to connect: {}", e);
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }

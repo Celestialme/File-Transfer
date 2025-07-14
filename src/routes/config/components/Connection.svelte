@@ -4,7 +4,7 @@
 	let error = $state('');
 </script>
 
-<p class="mb-3 block text-sm font-medium text-gray-700">Endpoint del servidor</p>
+<p class="mb-3 block text-sm font-medium text-gray-700">Server URL</p>
 <div class="w-ful flex gap-2">
 	<input
 		pattern="https?://.+"
@@ -22,7 +22,7 @@
 		}}
 		class="rounded-md bg-blue-600 px-4 py-2 text-white transition-colors duration-200 hover:bg-blue-700"
 	>
-		Gundar
+		Save
 	</button>
 </div>
 <p class:invisible={!error} class=" mt-2 text-sm text-red-600">{error}</p>

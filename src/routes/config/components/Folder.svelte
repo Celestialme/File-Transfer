@@ -21,7 +21,7 @@
 	}
 </script>
 
-<p class="mb-3 block text-sm font-medium text-gray-700">Selección de carpeta local observada</p>
+<p class="mb-3 block text-sm font-medium text-gray-700">Select local folder</p>
 <div class="w-ful flex gap-2">
 	<input
 		type="text"
@@ -36,7 +36,7 @@
 		{#if is_changed}
 			Save
 		{:else}
-			Seleccionar
+			Select
 		{/if}
 	</button>
 </div>

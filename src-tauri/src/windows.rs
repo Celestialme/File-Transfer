@@ -55,8 +55,8 @@ pub fn open_config_window(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tauri::WindowBuilder::new(&app, "config", tauri::WindowUrl::App("/config".into()))
             .title("Configuración")
-            .inner_size(600.0, 500.0)
-            .min_inner_size(600.0, 500.0)
+            .inner_size(700.0, 500.0)
+            .min_inner_size(700.0, 500.0)
             .theme(Some(tauri::Theme::Light))
             .focused(true)
             .maximizable(false)

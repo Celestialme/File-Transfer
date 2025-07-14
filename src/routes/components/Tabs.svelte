@@ -2,7 +2,7 @@
 	let { activeTab = $bindable(), activeTransfers, completedTransfers } = $props();
 </script>
 
-<div class="mb-6">
+<div class="my-6">
 	<div class="border-b border-gray-200">
 		<nav class="-mb-px flex space-x-8">
 			<button
@@ -13,7 +13,7 @@
 						: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
 				}`}
 			>
-				Transferencias en curso ({activeTransfers.length})
+				Current transfers ({activeTransfers.length})
 			</button>
 			<button
 				onclick={() => (activeTab = 'completed')}
@@ -23,7 +23,7 @@
 						: 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
 				}`}
 			>
-				Transferencias finalizadas ({completedTransfers.length})
+				Completed transfers ({completedTransfers.length})
 			</button>
 		</nav>
 	</div>

@@ -5,6 +5,8 @@
 	import Header from './components/Header.svelte';
 	import Tabs from './components/Tabs.svelte';
 	import { invoke } from '@tauri-apps/api';
+	import { isConnected } from '$lib/store.svelte';
+	import { Loader } from '@lucide/svelte';
 	type Transfer = {
 		path: string;
 		progress: number;
@@ -20,6 +22,11 @@
 		} else {
 			activeTransfers[data.path] = data;
 		}
+	});
+	listen('is_connected', (event) => {
+		console.log(event);
+		isConnected.set(event.payload as boolean);
+		console.log(isConnected);
 	});
 	invoke('get_completed_transfers').then((data) => {
 		completedTransfers = (data as Transfer[]).reduce(
@@ -37,17 +44,20 @@
 	let completedTransfersArray = $derived(Object.values(completedTransfers));
 </script>
 
+{#if !isConnected.get()}
+	<div
+		class="bg-opacity-90 fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-800"
+	>
+		<Loader class="mb-6 h-16 w-16 animate-spin text-white" />
+		<p class="mb-2 text-xl font-semibold text-white">Connection Lost</p>
+		<p class="text-md text-white">Changes will not be saved</p>
+	</div>
+{/if}
+
 <div
 	class="flex min-h-screen w-full flex-col items-center bg-gradient-to-br from-sky-50 to-blue-100 p-4"
 >
 	<Header />
-
-	<div class="flex items-center justify-between">
-		<div>
-			<h1 class="mb-2 text-4xl font-bold text-gray-800">Gestor de Transferencias</h1>
-			<p class="text-gray-600">Transfiere archivos de forma segura y eficiente</p>
-		</div>
-	</div>
 	<Tabs
 		bind:activeTab
 		activeTransfers={activeTransfersArray}
