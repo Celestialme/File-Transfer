@@ -9,7 +9,7 @@ use tauri::async_runtime::block_on;
 use tauri::Manager;
 use tokio_util::io::ReaderStream;
 
-use crate::synchronizer::{fstree, SOCKET_ID, TRANSFERS};
+use crate::synchronizer::{fstree, TRANSFERS};
 use crate::types::{Transfer, TransferState, TransferType};
 use crate::CONFIG;
 pub fn rename(
@@ -42,7 +42,6 @@ pub fn rename(
             "destination": destination,
             "parentId": parent_id.unwrap_or_default()
         }))
-        .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
         .header("authorization", token)
         .send()
         .map_err(|_| (println!("Failed to rename {path}")));
@@ -74,7 +73,6 @@ pub fn create_folder(
 
     let res = client
         .post(format!("{server}/files"))
-        .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
         .header("authorization", token)
         .multipart(form)
         .send()
@@ -104,7 +102,6 @@ pub fn delete(id: Arc<Mutex<Option<String>>>, path: &str) {
         .json(&json!({
             "path": path
         }))
-        .header("Socket-ID", SOCKET_ID.lock().unwrap().clone())
         .header("authorization", token)
         .send()
         .map_err(|_| (println!("Failed to delete {path}")));
@@ -122,7 +119,6 @@ pub fn upload(
     let parent_id = parent_id.lock().unwrap().clone();
 
     let config = CONFIG.lock().unwrap().clone();
-    let socket_id = SOCKET_ID.lock().unwrap().clone();
     let server = config.server_url.to_owned();
     let token = config.token.as_ref().unwrap().value.clone();
     let absolute_path = root_path.join(destination);
@@ -182,7 +178,6 @@ pub fn upload(
             let resp = client
                 .post(format!("{server}/upload"))
                 .header("Content-Type", "application/octet-stream")
-                .header("Socket-ID", socket_id)
                 .header("fileName", file_name_encoded)
                 .header("Content-Length", file_size.to_string())
                 .header("authorization", token)
@@ -219,9 +214,21 @@ pub async fn download(
     root_path: &PathBuf,
     path: String,
     id: Arc<Mutex<Option<String>>>,
+    hash: String,
     local_tree: Arc<Mutex<fstree::Node>>,
 ) {
-    let socket_id = SOCKET_ID.lock().unwrap().clone();
+    let id = id.lock().unwrap().clone();
+    let app_dir = app.path_resolver().app_data_dir().unwrap();
+    let temp_dir = app_dir.join("temp");
+    fs::create_dir_all(&temp_dir).unwrap();
+    let mut bytes = path.as_bytes().to_vec();
+    bytes.extend(hash.as_bytes());
+    let temp_name = fstree::hash_bytes(&bytes);
+    let temp_file_path = temp_dir.join(temp_name);
+    println!("Downloading {} to {}", path, temp_file_path.display());
+    if id.is_none() || temp_file_path.exists() {
+        return;
+    }
     let config = CONFIG.lock().unwrap().clone();
     let server = config.server_url.to_owned();
     let token = config.token.as_ref().unwrap().value.clone();
@@ -229,26 +236,27 @@ pub async fn download(
     let destination = full_path.clone();
     let window = app.get_window("main");
     let client = reqwest::Client::new();
-    let id = id.lock().unwrap().clone();
-    if id.is_none() {
-        return;
-    }
+
     let id = id.unwrap();
     let response = client
         .get(format!("{server}/files/{id}/download"))
-        .header("Socket-ID", socket_id)
         .header("authorization", token)
         .send()
         .await;
     let resp = match response {
         Ok(r) if r.status().is_success() => r,
-        _ => return, // early return on error or non-2xx
+        _ => {
+            let _ = fs::remove_file(&temp_file_path)
+                .map_err(|e| println!("Failed to remove temp file: {}", e));
+            return;
+        } // early return on error or non-2xx
     };
 
     let total_size = match resp.content_length() {
         Some(size) => size,
         None => {
-            eprintln!("Missing content length");
+            let _ = fs::remove_file(&temp_file_path)
+                .map_err(|e| println!("Failed to remove temp file: {}", e));
             return;
         }
     };
@@ -268,7 +276,7 @@ pub async fn download(
         fs::create_dir_all(parent).unwrap();
     }
 
-    let mut file = fs::File::create(&destination).unwrap();
+    let mut file = fs::File::create(&temp_file_path).unwrap();
     let mut downloaded: u64 = 0;
     let mut stream = resp.bytes_stream();
 
@@ -277,6 +285,8 @@ pub async fn download(
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Error downloading chunk: {e}");
+                let _ = fs::remove_file(&temp_file_path)
+                    .map_err(|e| println!("Failed to remove temp file: {}", e));
                 return;
             }
         };
@@ -300,6 +310,10 @@ pub async fn download(
             .insert(destination.clone(), transfer);
     }
 
+    let _ = fs::copy(&temp_file_path, &destination)
+        .map_err(|e| println!("Failed to Move from temp dir: {}", e));
+    let _ =
+        fs::remove_file(&temp_file_path).map_err(|e| println!("Failed to remove temp file: {}", e));
     // Add to local tree
     if let Ok(Some(node)) = fstree::build_node(&root_path, &destination).map(Some) {
         local_tree.lock().unwrap().add_node(node).unwrap();

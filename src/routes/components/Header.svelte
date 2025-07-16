@@ -3,9 +3,10 @@
 	import { invoke } from '@tauri-apps/api';
 	import { Globe, RefreshCcw, FolderInput, Settings } from '@lucide/svelte';
 	import { config } from '$lib/store.svelte';
+	let props: { class?: string } = $props();
 </script>
 
-<div class="mb-6 flex w-full items-center justify-between">
+<div class="mb-6 flex w-full items-center justify-between {props.class}">
 	<button
 		onclick={() => window.open(config.server_url, '_blank')}
 		class="cursor-pointer text-gray-600 transition-colors hover:text-gray-800"

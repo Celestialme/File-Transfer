@@ -19,7 +19,7 @@ use tauri::{
 };
 
 use crate::{
-    synchronizer::TRANSFERS,
+    synchronizer::{IS_CONNECTED, TRANSFERS},
     types::{Config, Token, TransferState},
 };
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
@@ -40,7 +40,10 @@ async fn main() {
     let system_tray = SystemTray::new().with_menu(create_tray_menu());
     tauri::Builder::default()
         .setup(|app| {
-            std::fs::create_dir_all(app.path_resolver().app_data_dir().unwrap()).unwrap();
+            let app_dir = app.path_resolver().app_data_dir().unwrap();
+            let temp_dir = app_dir.join("temp");
+            std::fs::create_dir_all(&app_dir).unwrap();
+            let _ = std::fs::remove_dir_all(&temp_dir);
             set_config(app.handle());
             let config = CONFIG.lock().unwrap().clone();
             if !config.is_configured {
@@ -70,7 +73,8 @@ async fn main() {
             save_initial_config,
             get_config,
             open_folder,
-            force_sync
+            force_sync,
+            check_connection
         ])
         .system_tray(system_tray)
         .on_system_tray_event(|app_handle, event| match event {
@@ -281,4 +285,8 @@ async fn logout(app: AppHandle) {
     token::stop();
     windows::close_all(app.clone(), vec!["Login"]);
     windows::open_login_window(app.clone());
+}
+#[tauri::command]
+fn check_connection() -> bool {
+    IS_CONNECTED.lock().unwrap().clone()
 }

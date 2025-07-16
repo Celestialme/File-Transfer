@@ -24,7 +24,7 @@ pub struct Node {
     pub parent_id: Arc<Mutex<Option<String>>>,
 }
 
-fn hash_bytes(bytes: &[u8]) -> String {
+pub fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())

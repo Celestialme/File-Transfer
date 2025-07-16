@@ -46,7 +46,7 @@
 
 {#if !isConnected.get()}
 	<div
-		class="bg-opacity-90 fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-800"
+		class=" fixed top-[50px] left-0 z-50 flex h-screen w-screen flex-col items-center justify-center bg-gray-800"
 	>
 		<Loader class="mb-6 h-16 w-16 animate-spin text-white" />
 		<p class="mb-2 text-xl font-semibold text-white">Connection Lost</p>

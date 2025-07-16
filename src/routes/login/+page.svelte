@@ -47,7 +47,7 @@
 					isLoading ? 'cursor-not-allowed opacity-50' : ''
 				}`}
 			>
-				{isLoading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
+				{isLoading ? 'Logging in...' : 'Login'}
 			</button>
 
 			<p class:invisible={!error} class=" min-h-[30px] text-center text-red-500">{error}</p>

@@ -20,9 +20,9 @@ mod api;
 mod debouncer;
 pub(crate) mod fstree;
 
+pub static IS_CONNECTED: Mutex<bool> = Mutex::new(false);
 pub static TRANSFERS: LazyLock<Mutex<HashMap<PathBuf, Transfer>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static SOCKET_ID: Mutex<String> = Mutex::new(String::new());
 static WATCHER: Mutex<Option<RecommendedWatcher>> = Mutex::new(None);
 pub fn start(app: tauri::AppHandle) {
     tokio::spawn(async move {
@@ -44,7 +44,6 @@ pub fn start(app: tauri::AppHandle) {
         let _app = app.app_handle().clone();
         fstree::save_tree(&local_tree.lock().unwrap(), "tree.json").unwrap();
         let socket_task = async move {
-            *SOCKET_ID.lock().unwrap() = uuid::Uuid::new_v4().to_string();
             let local_tree = _local_tree.clone();
             let root_path = _root_path.clone();
             let app = _app.app_handle().clone();
@@ -64,15 +63,13 @@ pub fn start(app: tauri::AppHandle) {
                         .replace("https://", "ws://")
                         .replace("http://", "ws://")
                 );
-                let socket_id = SOCKET_ID.lock().unwrap().clone();
                 let uri: Uri = socket_url.parse().unwrap();
 
-                let request = ClientRequestBuilder::new(uri)
-                    .with_header("socket_id", &socket_id)
-                    .with_header("authorization", &token);
+                let request = ClientRequestBuilder::new(uri).with_header("authorization", &token);
                 match connect_async(request).await {
                     Ok((mut socket, _response)) => {
                         println!("Connected to server");
+                        *IS_CONNECTED.lock().unwrap() = true;
                         app.emit_all("is_connected", true).unwrap();
                         while let Some(msg) = socket.next().await {
                             match msg {
@@ -94,6 +91,7 @@ pub fn start(app: tauri::AppHandle) {
                         println!("Disconnected from server");
                     }
                     Err(e) => {
+                        *IS_CONNECTED.lock().unwrap() = false;
                         app.emit_all("is_connected", false).unwrap();
                         println!("Failed to connect: {}", e);
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -160,6 +158,7 @@ async fn handle_msg(
                         root_path,
                         change.path,
                         change.id,
+                        change.hash.unwrap(),
                         local_tree.clone(),
                     ));
                 }
@@ -213,6 +212,7 @@ async fn handle_msg(
                 root_path,
                 change.path,
                 change.id,
+                change.hash.unwrap(),
                 local_tree.clone(),
             )),
         }
